@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/Cargo.toml" />
+  </component>
+  <component name="HaskellBuildOptions">
+    <ghcPath>/usr/local/bin/ghc</ghcPath>
+    <cabalPath>/usr/local/bin/cabal</cabalPath>
+    <stackPath>/usr/local/bin/stack</stackPath>
+  </component>
+  <component name="PhpWorkspaceProjectConfiguration" backward_compatibility_performed="true" />
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_1_6" project-jdk-name="Elixir 1.6.1" project-jdk-type="Elixir SDK">
+    <output url="file://$PROJECT_DIR$/out" />
+  </component>
+  <component name="RustProjectSettings">
+    <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
+  </component>
+</project>
