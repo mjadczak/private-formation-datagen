@@ -1,5 +1,8 @@
 #[macro_use]
 extern crate clap;
+extern crate pid_control;
+
+pub mod simulation;
 
 fn main() {
     let matches = clap_app!(datagen =>
