@@ -246,6 +246,7 @@ pub struct SimpleSimulation<C: Controller<Metres>> {
     current_pos: Vec<Metres>,
     current_vel: Vec<MetresPerSecond>,
     trajectory: NaiveTrajectory<Metres>,
+    trajectory_origin: Metres,
     follow_mode: LeaderFollowMode
 }
 
@@ -256,13 +257,19 @@ impl<C> SimpleSimulation<C>
                                                            controllers: CI, formation: &F,
                                                            trajectory: &NaiveTrajectory<Metres>, follow_mode: LeaderFollowMode)
                                                            -> Self {
-        let controllers: Vec<C> = controllers.into_iter().collect();
+        let mut controllers: Vec<C> = controllers.into_iter().collect();
         assert!(leader_id < num_robots);
         assert!(num_robots > 0);
         assert_eq!(controllers.len(), num_robots);
         assert_eq!(formation.num_robots(), num_robots);
         assert_eq!(formation.positions().len(), num_robots);
         let current_pos: Vec<Metres> = formation.positions().iter().map(|pos| pos - formation.origin()).collect();
+
+        // Set targets for controllers
+        let leader_pos = current_pos[leader_id];
+        for (i, c) in controllers.iter_mut().enumerate() {
+            c.set_target(leader_pos - current_pos[i]);
+        }
 
         SimpleSimulation {
             num_robots,
@@ -272,6 +279,7 @@ impl<C> SimpleSimulation<C>
             current_pos,
             current_vel: vec![0.; num_robots],
             trajectory: trajectory.clone(),
+            trajectory_origin: leader_pos,
             follow_mode
         }
     }
@@ -301,18 +309,19 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
         }
 
         for step in 0..num_steps {
-            // First, update the current position of each robot based on the velocity since last time step
-            // Also, record the current position at this step into the results
-            for ((mut pos, vel), mut result) in self.current_pos.iter_mut().zip(self.current_vel.iter()).zip(self.results.iter_mut()) {
-                *pos += vel;
-                result.push(*pos);
-            }
-
-            let reference_pos = self.trajectory.data()[step];
+            let reference_pos = self.trajectory.data()[step] + self.trajectory_origin;
 
             // Handle case where the leader exactly takes the reference trajectory
             if self.follow_mode == LeaderFollowMode::DefinedTrajectory {
                 self.current_pos[self.leader_id] = reference_pos;
+            }
+
+            // First, update the current position of each robot based on the velocity since last time step
+            // Also, record the current position at this step into the results
+            // Vel is kept at 0 in the case of DefinedTrajectory, so this is fine
+            for ((mut pos, vel), mut result) in self.current_pos.iter_mut().zip(self.current_vel.iter()).zip(self.results.iter_mut()) {
+                *pos += vel;
+                result.push(*pos);
             }
 
             // Now run the controllers for each robot, obtaining the new velocity for the next time slice

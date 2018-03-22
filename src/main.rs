@@ -42,8 +42,10 @@ fn test_traj_gen() {
     ];
     println!("Sample trajectory piecewise: {:?}", sample_trajectory_points);
 
+    let resolution = 0.1;
+
     // convert
-    let converted_trajectory = trajectory::NaiveTrajectory::from_points(0.1, sample_trajectory_points);
+    let converted_trajectory = trajectory::NaiveTrajectory::from_points(resolution, sample_trajectory_points);
 
     // simulate
     let cparams = simulation::PControllerParams::default();
@@ -51,11 +53,18 @@ fn test_traj_gen() {
         simulation::PController::new(cparams),
         simulation::PController::new(cparams)
     ];
-    let formation = simulation::SimpleFormation::new(2, 0., vec![0.1, 0.]);
-    let simulation = simulation::SimpleSimulation::new(2, 0, controllers, &formation, &converted_trajectory, simulation::LeaderFollowMode::DefinedTrajectory);
+    let formation = simulation::SimpleFormation::new(2, 0., vec![0.2, 0.]);
+    let simulation =
+        simulation::SimpleSimulation::new(2, 0, controllers, &formation,
+                                          &converted_trajectory, simulation::LeaderFollowMode::FollowTrajectory);
     let result = simulation.run(10., 0.1).into_data();
 
-    for (r1, r2) in result[0].iter().zip(result[1].iter()) {
-        println!("r1: {}, r2: {}", *r1, *r2);
+    // write to a test path
+    let mut writer = csv::Writer::from_path("../test_data/test_traj.csv").unwrap();
+    writer.write_record(&["time", "r1", "r2"]);
+    for (i, (r1, r2)) in result[0].iter().zip(result[1].iter()).enumerate() {
+        let t = i as f64 * resolution;
+        writer.write_record(&[t.to_string(), r1.to_string(), r2.to_string()]).unwrap();
     }
+    writer.flush().unwrap();
 }
