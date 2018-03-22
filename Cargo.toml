@@ -6,3 +6,4 @@ authors = ["Matt Jadczak <matt@mjdk.co.uk>"]
 [dependencies]
 clap = "~2.31.1"
 pid_control = "~0.7.2"
+num = "~0.1.42"

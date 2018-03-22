@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate clap;
 extern crate pid_control;
+extern crate num;
 
 pub mod simulation;
 
