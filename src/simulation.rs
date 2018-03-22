@@ -37,7 +37,7 @@ pub trait SimulationResult<S: Vector> {
 pub trait Simulation<S: Vector> {
     type Result: SimulationResult<S>;
 
-    fn run(self, total_time: Seconds, time_step: Seconds) -> Self::Result;
+    fn run(self, total_time: Seconds, time_step: Seconds, observer: &mut Observer<S>) -> Self::Result;
 }
 
 #[derive(Debug, Clone)]
@@ -205,7 +205,7 @@ pub enum LeaderFollowMode {
     FollowTrajectory,
 }
 
-pub trait Sensor {
+pub trait DistanceSensor {
     fn sense(&mut self, true_d: f64) -> f64;
 }
 
@@ -227,13 +227,52 @@ impl Default for SharpIrSensor {
 }
 
 const SHARP_IR_EQN: [f64; 3] = [-0.020077009250469, 0.120573832696841, 0.003295559781587];
-impl Sensor for SharpIrSensor {
+impl DistanceSensor for SharpIrSensor {
     fn sense(&mut self, true_d: f64) -> f64 {
         let d2 = true_d * true_d;
         let d3 = true_d * d2;
         let sd = d3 * SHARP_IR_EQN[0] + d2 * SHARP_IR_EQN[1] + true_d * SHARP_IR_EQN[0];
         let error = self.rng.sample(StandardNormal) * sd;
         true_d + error
+    }
+}
+
+pub trait Observer<S: Vector> {
+    fn observe(&mut self, true_pos: S) -> S;
+}
+
+pub struct SimpleObserver {
+    sd: f64,
+    rng: SmallRng
+}
+
+impl SimpleObserver {
+    pub fn new(sd: f64) -> Self {
+        SimpleObserver {
+            sd,
+            rng: SmallRng::new()
+        }
+    }
+}
+
+impl Default for SimpleObserver {
+    fn default() -> Self {
+        Self::new(1.)
+    }
+}
+
+impl Observer<Metres> for SimpleObserver {
+    fn observe(&mut self, true_pos: f64) -> f64 {
+        let error = self.rng.sample(StandardNormal) * self.sd;
+        true_pos + error
+    }
+}
+
+pub struct PerfectObserver {}
+
+impl<S: Vector> Observer<S> for PerfectObserver {
+    fn observe(&mut self, true_pos: S) -> S {
+        true_pos
     }
 }
 
@@ -292,7 +331,7 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
 
     /// Runs the entire simulation synchronously.
     /// Runs for an integer number of `time_step`s, potentially stopping past `total_time` if they are not multiples
-    fn run(mut self, total_time: Seconds, time_step: Seconds) -> SimpleSimulationResult<Metres> {
+    fn run(mut self, total_time: Seconds, time_step: Seconds, observer: &mut Observer<Metres>) -> SimpleSimulationResult<Metres> {
         assert_eq!(self.trajectory.time_step(), time_step);
         let num_steps: usize = (total_time / time_step).ceil() as _;
         assert!(self.trajectory.data().len() >= num_steps);
@@ -321,7 +360,7 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
             // Vel is kept at 0 in the case of DefinedTrajectory, so this is fine
             for ((mut pos, vel), mut result) in self.current_pos.iter_mut().zip(self.current_vel.iter()).zip(self.results.iter_mut()) {
                 *pos += vel;
-                result.push(*pos);
+                result.push(observer.observe(*pos));
             }
 
             // Now run the controllers for each robot, obtaining the new velocity for the next time slice

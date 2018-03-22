@@ -57,11 +57,13 @@ fn test_traj_gen() {
     let simulation =
         simulation::SimpleSimulation::new(2, 0, controllers, &formation,
                                           &converted_trajectory, simulation::LeaderFollowMode::FollowTrajectory);
-    let result = simulation.run(10., 0.1).into_data();
+    let mut observer = simulation::SimpleObserver::new(0.1);
+
+    let result = simulation.run(10., 0.1, &mut observer).into_data();
 
     // write to a test path
     let mut writer = csv::Writer::from_path("../test_data/test_traj.csv").unwrap();
-    writer.write_record(&["time", "r1", "r2"]);
+    writer.write_record(&["time", "r1", "r2"]).unwrap();
     for (i, (r1, r2)) in result[0].iter().zip(result[1].iter()).enumerate() {
         let t = i as f64 * resolution;
         writer.write_record(&[t.to_string(), r1.to_string(), r2.to_string()]).unwrap();
