@@ -4,6 +4,8 @@ extern crate pid_control;
 extern crate num;
 
 pub mod simulation;
+pub mod trajectory;
+pub mod base;
 
 fn main() {
     let matches = clap_app!(datagen =>

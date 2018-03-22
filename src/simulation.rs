@@ -1,13 +1,7 @@
-use std::ops::*;
 use pid_control::{PIDController as PIDControllerImpl, Controller as PIDControllerT};
-
-pub trait Vector: PartialEq + Add + Sub + Mul + PartialOrd + Sized + Copy {}
-
-pub type Seconds = f64;
-pub type Metres = f64;
-pub type MetresPerSecond = f64;
-
-impl Vector for f64 {}
+use trajectory;
+use base::*;
+use trajectory::NaiveTrajectory;
 
 
 pub trait Controller<SpaceEl: Vector>: Clone {
@@ -195,9 +189,6 @@ impl<SpaceEl: Vector> SimulationResult<SpaceEl> for SimpleSimulationResult<Space
     }
 }
 
-#[derive(Clone)]
-pub struct NaiveTrajectory<SpaceEl: Vector>(Seconds, Vec<SpaceEl>);
-
 #[derive(PartialEq)]
 pub enum LeaderFollowMode {
     /// Simply use the reference trajectory as the exact trajectory of the leader
@@ -255,9 +246,9 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
     /// Runs the entire simulation synchronously.
     /// Runs for an integer number of `time_step`s, potentially stopping past `total_time` if they are not multiples
     fn run(mut self, total_time: Seconds, time_step: Seconds) -> SimpleSimulationResult<Metres> {
-        assert_eq!(self.trajectory.0, time_step);
+        assert_eq!(self.trajectory.time_step(), time_step);
         let num_steps: usize = (total_time / time_step).ceil() as _;
-        assert!(self.trajectory.1.len() >= num_steps);
+        assert!(self.trajectory.data().len() >= num_steps);
 
         // Allocate space
         for res_vec in self.results.iter_mut() {
@@ -272,7 +263,7 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
                 result.push(*pos);
             }
 
-            let reference_pos = self.trajectory.1[step];
+            let reference_pos = self.trajectory.data()[step];
 
             // Handle case where the leader exactly takes the reference trajectory
             if self.follow_mode == LeaderFollowMode::DefinedTrajectory {
