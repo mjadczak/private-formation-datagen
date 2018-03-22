@@ -1,7 +1,8 @@
 use pid_control::{PIDController as PIDControllerImpl, Controller as PIDControllerT};
 use base::*;
 use trajectory::NaiveTrajectory;
-
+use rand::{NewRng, SmallRng, Rng};
+use rand::distributions::StandardNormal;
 
 pub trait Controller<S: Vector>: Clone {
     type Params: Clone + Default;
@@ -40,7 +41,14 @@ pub trait Simulation<S: Vector> {
 }
 
 #[derive(Debug, Clone)]
-struct SimpleFormation<S: Vector>(usize, S, Vec<S>);
+pub struct SimpleFormation<S: Vector>(usize, S, Vec<S>);
+
+impl<S: Vector> SimpleFormation<S> {
+    pub fn new(num_robots: usize, origin: S, positions: Vec<S>) -> Self {
+        assert_eq!(positions.len(), num_robots);
+        SimpleFormation(num_robots, origin, positions)
+    }
+}
 
 impl<S: Vector> Formation<S> for SimpleFormation<S> {
     fn num_robots(&self) -> usize { self.0 }
@@ -57,8 +65,8 @@ pub struct PControllerParams {
 impl Default for PControllerParams {
     fn default() -> Self {
         PControllerParams {
-            p_gain: 1.5,
-            vel_limits: (-0.1, 0.1),
+            p_gain: -1.5,
+            vel_limits: (-0.5, 0.5),
         }
     }
 }
@@ -115,10 +123,10 @@ pub struct PIDControllerParams {
 impl Default for PIDControllerParams {
     fn default() -> Self {
         PIDControllerParams {
-            p_gain: 1.5,
-            i_gain: 0.5,
-            d_gain: 0.5,
-            vel_limits: (-0.1, 0.1),
+            p_gain: -1.5,
+            i_gain: -0.5,
+            d_gain: -0.5,
+            vel_limits: (-0.5, 0.5),
         }
     }
 }
@@ -197,6 +205,38 @@ pub enum LeaderFollowMode {
     FollowTrajectory,
 }
 
+pub trait Sensor {
+    fn sense(&mut self, true_d: f64) -> f64;
+}
+
+pub struct SharpIrSensor {
+    rng: SmallRng
+}
+
+impl SharpIrSensor {
+    pub fn new() -> SharpIrSensor {
+        let rng = SmallRng::new();
+        SharpIrSensor { rng }
+    }
+}
+
+impl Default for SharpIrSensor {
+    fn default() -> Self {
+        SharpIrSensor::new()
+    }
+}
+
+const SHARP_IR_EQN: [f64; 3] = [-0.020077009250469, 0.120573832696841, 0.003295559781587];
+impl Sensor for SharpIrSensor {
+    fn sense(&mut self, true_d: f64) -> f64 {
+        let d2 = true_d * true_d;
+        let d3 = true_d * d2;
+        let sd = d3 * SHARP_IR_EQN[0] + d2 * SHARP_IR_EQN[1] + true_d * SHARP_IR_EQN[0];
+        let error = self.rng.sample(StandardNormal) * sd;
+        true_d + error
+    }
+}
+
 /// Simple simulation in Metres and Seconds which uses the same controller for every robot
 pub struct SimpleSimulation<C: Controller<Metres>> {
     num_robots: usize,
@@ -254,6 +294,12 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
             res_vec.reserve(num_steps);
         }
 
+        // TODO: make the sensors configurable (possibly per-robot?)
+        let mut sensors: Vec<SharpIrSensor> = Vec::with_capacity(self.num_robots);
+        for _ in 0..self.num_robots {
+            sensors.push(SharpIrSensor::new())
+        }
+
         for step in 0..num_steps {
             // First, update the current position of each robot based on the velocity since last time step
             // Also, record the current position at this step into the results
@@ -282,7 +328,8 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
                         leader_pos
                     };
                 let target_distance = target_pos - self.current_pos[id];
-                *velocity = controller.take_step(target_distance, time_step);
+                let sensed_distance = sensors[id].sense(target_distance);
+                *velocity = controller.take_step(sensed_distance, time_step);
             }
         }
 

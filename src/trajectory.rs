@@ -1,7 +1,7 @@
 use base::*;
 use std::ops::Index;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NaiveTrajectory<S: Vector>(Seconds, Vec<S>);
 
 impl<S: Vector> NaiveTrajectory<S> {
@@ -12,10 +12,10 @@ impl<S: Vector> NaiveTrajectory<S> {
     /// The points should be at integer multiples of the resolution, and must be ordered in increasing order.
     /// The first point should have time = 0
     pub fn from_points<I>(resolution: Seconds, points: I) -> NaiveTrajectory<S>
-        where I: Iterator<Item = (Seconds, S)>
+        where I: IntoIterator<Item = (Seconds, S)>
     {
         let mut data: Vec<S> = Vec::new();
-        let mut pk = points.peekable();
+        let mut pk = points.into_iter().peekable();
         if let None = pk.peek() {
             panic!("must pass in some points");
         }
@@ -37,7 +37,7 @@ impl<S: Vector> NaiveTrajectory<S> {
                 if cur_time > right_time { break; }
 
                 let a = (cur_time - left_time) / time_span;
-                let pos = left_pos * a + right_pos * (1. - a);
+                let pos = left_pos * (1. - a) + right_pos * a;
                 data.push(pos);
 
                 cur_index += 1;
@@ -80,7 +80,7 @@ impl<S: Vector> Trajectory<S> for NaiveTrajectory<S> {
         let val_right = self.1[sample_right];
         let a = (time - time_left) / time_span;
 
-        val_left * a + val_right * (1. - a)
+        val_left * (1. - a) + val_right * a
     }
 
     fn end_time(&self) -> Seconds { self.0 * ((self.1.len() - 1) as f64) }

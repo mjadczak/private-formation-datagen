@@ -7,3 +7,5 @@ authors = ["Matt Jadczak <matt@mjdk.co.uk>"]
 clap = "~2.31.1"
 pid_control = "~0.7.2"
 num = "~0.1.42"
+rand = { path="../rand" }
+csv = "1.0.0-beta.5"
