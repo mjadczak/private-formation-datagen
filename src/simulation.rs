@@ -1,52 +1,51 @@
 use pid_control::{PIDController as PIDControllerImpl, Controller as PIDControllerT};
-use trajectory;
 use base::*;
 use trajectory::NaiveTrajectory;
 
 
-pub trait Controller<SpaceEl: Vector>: Clone {
+pub trait Controller<S: Vector>: Clone {
     type Params: Clone + Default;
 
     fn params(&self) -> Self::Params;
-    fn target(&self) -> SpaceEl;
-    fn set_target(&mut self, target: SpaceEl);
+    fn target(&self) -> S;
+    fn set_target(&mut self, target: S);
 
     /// Takes the current measured distance to the target, and returns the new velocity vector
-    fn take_step(&mut self, distance: SpaceEl, time_step: Seconds) -> SpaceEl;
+    fn take_step(&mut self, distance: S, time_step: Seconds) -> S;
 }
 
 /// A simplified view of a formation for N robots. Some robot is defined to be the leader and
 /// all others attempt to keep their distance from it as defined by the formation.
 /// The origin specifies their initial positions in a simulation.
-pub trait Formation<SpaceEl: Vector>: Clone {
+pub trait Formation<S: Vector>: Clone {
     fn num_robots(&self) -> usize;
-    fn origin(&self) -> SpaceEl;
-    fn positions(&self) -> &[SpaceEl];
+    fn origin(&self) -> S;
+    fn positions(&self) -> &[S];
 }
 
 /// An observed result of a simulation for multiple robots, with a fixed-size time step
-pub trait SimulationResult<SpaceEl: Vector> {
+pub trait SimulationResult<S: Vector> {
     fn time_step(&self) -> Seconds;
     fn num_robots(&self) -> usize;
     fn num_steps(&self) -> usize;
 
     /// First dimension is robot number, second dimension is step
-    fn into_data(self) -> Vec<Vec<SpaceEl>>;
+    fn into_data(self) -> Vec<Vec<S>>;
 }
 
-pub trait Simulation<SpaceEl: Vector> {
-    type Result: SimulationResult<SpaceEl>;
+pub trait Simulation<S: Vector> {
+    type Result: SimulationResult<S>;
 
     fn run(self, total_time: Seconds, time_step: Seconds) -> Self::Result;
 }
 
 #[derive(Debug, Clone)]
-struct SimpleFormation<SpaceEl: Vector>(usize, SpaceEl, Vec<SpaceEl>);
+struct SimpleFormation<S: Vector>(usize, S, Vec<S>);
 
-impl<SpaceEl: Vector> Formation<SpaceEl> for SimpleFormation<SpaceEl> {
+impl<S: Vector> Formation<S> for SimpleFormation<S> {
     fn num_robots(&self) -> usize { self.0 }
-    fn origin(&self) -> SpaceEl { self.1 }
-    fn positions(&self) -> &[SpaceEl] { &self.2[..] }
+    fn origin(&self) -> S { self.1 }
+    fn positions(&self) -> &[S] { &self.2[..] }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -165,9 +164,9 @@ impl Controller<f64> for PIDController {
     }
 }
 
-pub struct SimpleSimulationResult<SpaceEl: Vector>(Seconds, Vec<Vec<SpaceEl>>);
+pub struct SimpleSimulationResult<S: Vector>(Seconds, Vec<Vec<S>>);
 
-impl<SpaceEl: Vector> SimulationResult<SpaceEl> for SimpleSimulationResult<SpaceEl> {
+impl<S: Vector> SimulationResult<S> for SimpleSimulationResult<S> {
     fn time_step(&self) -> Seconds {
         self.0
     }
@@ -184,7 +183,7 @@ impl<SpaceEl: Vector> SimulationResult<SpaceEl> for SimpleSimulationResult<Space
         }
     }
 
-    fn into_data(self) -> Vec<Vec<SpaceEl>> {
+    fn into_data(self) -> Vec<Vec<S>> {
         self.1
     }
 }
