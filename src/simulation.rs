@@ -124,8 +124,8 @@ impl Default for PIDControllerParams {
     fn default() -> Self {
         PIDControllerParams {
             p_gain: -1.5,
-            i_gain: -0.5,
-            d_gain: -0.5,
+            i_gain: 0.,
+            d_gain: -0.05,
             vel_limits: (-0.5, 0.5),
         }
     }
@@ -197,12 +197,12 @@ impl<S: Vector> SimulationResult<S> for SimpleSimulationResult<S> {
 }
 
 #[derive(PartialEq)]
-pub enum LeaderFollowMode {
+pub enum LeaderTrajectoryMode {
     /// Simply use the reference trajectory as the exact trajectory of the leader
-    DefinedTrajectory,
+    Predefined,
 
     /// Use the reference trajectory as something for the leader to follow
-    FollowTrajectory,
+    Follow,
 }
 
 pub trait DistanceSensor {
@@ -227,6 +227,7 @@ impl Default for SharpIrSensor {
 }
 
 const SHARP_IR_EQN: [f64; 3] = [-0.020077009250469, 0.120573832696841, 0.003295559781587];
+
 impl DistanceSensor for SharpIrSensor {
     fn sense(&mut self, true_d: f64) -> f64 {
         let d2 = true_d * true_d;
@@ -243,14 +244,14 @@ pub trait Observer<S: Vector> {
 
 pub struct SimpleObserver {
     sd: f64,
-    rng: SmallRng
+    rng: SmallRng,
 }
 
 impl SimpleObserver {
     pub fn new(sd: f64) -> Self {
         SimpleObserver {
             sd,
-            rng: SmallRng::new()
+            rng: SmallRng::new(),
         }
     }
 }
@@ -286,16 +287,18 @@ pub struct SimpleSimulation<C: Controller<Metres>> {
     current_vel: Vec<MetresPerSecond>,
     trajectory: NaiveTrajectory<Metres>,
     trajectory_origin: Metres,
-    follow_mode: LeaderFollowMode
+    follow_mode: LeaderTrajectoryMode,
 }
 
 impl<C> SimpleSimulation<C>
     where C: Controller<Metres>
 {
-    pub fn new<CI: IntoIterator<Item=C>, F: Formation<Metres>>(num_robots: usize, leader_id: usize,
-                                                           controllers: CI, formation: &F,
-                                                           trajectory: &NaiveTrajectory<Metres>, follow_mode: LeaderFollowMode)
-                                                           -> Self {
+    pub fn new<CI: IntoIterator<Item=C>, F: Formation<Metres>>(num_robots: usize,
+                                                               leader_id: usize,
+                                                               controllers: CI, formation: &F,
+                                                               trajectory: &NaiveTrajectory<Metres>,
+                                                               follow_mode: LeaderTrajectoryMode)
+                                                               -> Self {
         let mut controllers: Vec<C> = controllers.into_iter().collect();
         assert!(leader_id < num_robots);
         assert!(num_robots > 0);
@@ -319,7 +322,7 @@ impl<C> SimpleSimulation<C>
             current_vel: vec![0.; num_robots],
             trajectory: trajectory.clone(),
             trajectory_origin: leader_pos,
-            follow_mode
+            follow_mode,
         }
     }
 }
@@ -333,7 +336,8 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
     /// Runs for an integer number of `time_step`s, potentially stopping past `total_time` if they are not multiples
     fn run(mut self, total_time: Seconds, time_step: Seconds, observer: &mut Observer<Metres>) -> SimpleSimulationResult<Metres> {
         assert_eq!(self.trajectory.time_step(), time_step);
-        let num_steps: usize = (total_time / time_step).ceil() as _;
+        // +1 since `num_steps` is really the number of data points, and the number of steps is one less than that.
+        let num_steps: usize = ((total_time / time_step).ceil() as usize) + 1;
         assert!(self.trajectory.data().len() >= num_steps);
 
         // Allocate space
@@ -351,7 +355,7 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
             let reference_pos = self.trajectory.data()[step] + self.trajectory_origin;
 
             // Handle case where the leader exactly takes the reference trajectory
-            if self.follow_mode == LeaderFollowMode::DefinedTrajectory {
+            if self.follow_mode == LeaderTrajectoryMode::Predefined {
                 self.current_pos[self.leader_id] = reference_pos;
             }
 
@@ -369,8 +373,8 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
                 let target_pos =
                     if id == self.leader_id {
                         match self.follow_mode {
-                            LeaderFollowMode::DefinedTrajectory => continue,
-                            LeaderFollowMode::FollowTrajectory => reference_pos
+                            LeaderTrajectoryMode::Predefined => continue,
+                            LeaderTrajectoryMode::Follow => reference_pos
                         }
                     } else {
                         leader_pos

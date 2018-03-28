@@ -1,5 +1,8 @@
 use base::*;
 use std::ops::Index;
+use rand::{SmallRng, SeedableRng, thread_rng, Rng};
+use rand::distributions::{Normal, Distribution};
+use std::ops::Range;
 
 #[derive(Clone, Debug)]
 pub struct NaiveTrajectory<S: Vector>(Seconds, Vec<S>);
@@ -12,7 +15,7 @@ impl<S: Vector> NaiveTrajectory<S> {
     /// The points should be at integer multiples of the resolution, and must be ordered in increasing order.
     /// The first point should have time = 0
     pub fn from_points<I>(resolution: Seconds, points: I) -> NaiveTrajectory<S>
-        where I: IntoIterator<Item = (Seconds, S)>
+        where I: IntoIterator<Item=(Seconds, S)>
     {
         let mut data: Vec<S> = Vec::new();
         let mut pk = points.into_iter().peekable();
@@ -94,5 +97,78 @@ impl<S: Vector> Index<usize> for NaiveTrajectory<S> {
     type Output = S;
     fn index(&self, index: usize) -> &S {
         &self.1[index]
+    }
+}
+
+/// A simple, non-configurable trajectory generation algorithm.
+/// `variability` controls how many segments the trajectory has – the segments generated have a mean length of `min_length / variability`.
+/// `rsd` controls how much the segment length varies.
+///
+/// The algorithm hardcodes a probability of 1/4 stationary, 1/4 full-speed with 3/4 chance forward, and 1/2 randomly-chosen speed.
+/// This could be made configurable in the future.
+///
+/// The trajectory always starts at the origin.
+pub fn generate_1d_trajectory_points_simple(max_speed: MetresPerSecond, min_length: Seconds, variability: f64, rsd: f64) -> Vec<(Seconds, Metres)> {
+    let mut rng = SmallRng::from_rng(thread_rng()).unwrap();
+    let segment_length_dist = {
+        let mean = min_length / variability;
+        let sd = mean * rsd;
+        Normal::new(mean, sd)
+    };
+    let generator = SpeedGenerator::new(max_speed, 0.2, 0.7, 0.85);
+    let mut cur_time = 0.;
+    let mut cur_pos = 0.;
+    let mut points = vec![(cur_time, cur_pos)];
+
+    while cur_time < min_length {
+        let seg_length = segment_length_dist.sample(&mut rng);
+        if seg_length <= 0. { continue }
+        cur_time += seg_length;
+        let velocity = generator.gen_speed(&mut rng);
+        cur_pos += velocity * seg_length;
+        points.push((cur_time, cur_pos));
+    }
+
+    points
+}
+
+struct SpeedGenerator {
+    max_speed: MetresPerSecond,
+    thresh_fullspeed: f64,
+    thresh_randomspeed: f64,
+    thresh_forward: f64,
+    speed_dist: Normal,
+}
+
+impl SpeedGenerator {
+    fn new(max_speed: MetresPerSecond, thresh_fullspeed: f64, thresh_randomspeed: f64, thresh_forward: f64) -> Self {
+        let speed_sd = max_speed / 1.96;
+        // 95% of returned values will lie between -max_speed and max_speed
+        let speed_dist = Normal::new(0., speed_sd);
+        SpeedGenerator {
+            max_speed,
+            thresh_fullspeed,
+            thresh_randomspeed,
+            thresh_forward,
+            speed_dist,
+        }
+    }
+
+    #[inline]
+    fn clamp_speed(&self, val: f64) -> f64 {
+        val.max(-self.max_speed).min(self.max_speed)
+    }
+
+    fn gen_speed<R: Rng + ?Sized>(&self, rng: &mut R) -> MetresPerSecond {
+        let sample: f64 = rng.gen();
+        // TODO make thresh names less confusing
+        if sample < self.thresh_fullspeed {
+            return 0.;
+        }
+        if sample < self.thresh_randomspeed {
+            let is_forward = rng.gen::<f64>() < self.thresh_forward;
+            return if is_forward { self.max_speed } else { -self.max_speed };
+        }
+        return self.clamp_speed(self.speed_dist.sample(rng));
     }
 }
