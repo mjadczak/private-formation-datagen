@@ -196,7 +196,7 @@ impl<S: Vector> SimulationResult<S> for SimpleSimulationResult<S> {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Copy, Clone)]
 pub enum LeaderTrajectoryMode {
     /// Simply use the reference trajectory as the exact trajectory of the leader
     Predefined,
