@@ -282,7 +282,8 @@ impl ::protobuf::Message for FloatList {
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
         if !self.value.is_empty() {
-            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(self.value.len() as u32) + (self.value.len() * 4) as u32;
+            let list_bytes = (self.value.len() * 4) as u32;
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(list_bytes) + list_bytes;
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);

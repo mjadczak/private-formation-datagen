@@ -200,8 +200,8 @@ fn tf_data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) -
                                               &converted_trajectory, trajectory_mode);
         let mut observer = simulation::SimpleObserver::new(0.05);
         //let mut observer = simulation::PerfectObserver {};
-        let result0 = simulation0.run(10., resolution, &mut observer);
-        let result1 = simulation1.run(10., resolution, &mut observer);
+        let result0 = simulation0.run(length, resolution, &mut observer);
+        let result1 = simulation1.run(length, resolution, &mut observer);
 
         writer.write_record(result0, 0)?;
         writer.write_record(result1, 1)?;
@@ -239,8 +239,8 @@ fn data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
                                               &converted_trajectory, trajectory_mode);
         let mut observer = simulation::SimpleObserver::new(0.05);
         //let mut observer = simulation::PerfectObserver {};
-        let result0 = simulation0.run(10., resolution, &mut observer).into_data();
-        let result1 = simulation1.run(10., resolution, &mut observer).into_data();
+        let result0 = simulation0.run(length, resolution, &mut observer).into_data();
+        let result1 = simulation1.run(length, resolution, &mut observer).into_data();
 
         let file_name = format!("traj_{:0width$}_l0.csv", i, width = num_len);
         let mut writer = csv::Writer::from_path(out_dir_path.join(&file_name)).unwrap();

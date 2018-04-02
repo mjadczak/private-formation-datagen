@@ -137,8 +137,10 @@ impl ResultsWriter<Metres> {
         for (i, x) in data.into_iter().enumerate() {
             let mut feature_list = FloatList::new();
             feature_list.set_value(x.into_iter().map(|v| v as f32).collect());
+
             let mut feature = Feature::new();
             feature.set_float_list(feature_list);
+
             let key = format!("x{}", i);
             features.insert(key, feature);
         }
@@ -150,6 +152,8 @@ impl ResultsWriter<Metres> {
         example.set_features(features_msg);
 
         let data_length = example.compute_size() as u64;
+
+
 
         // Format of a single record:
         // all fields little-endian
