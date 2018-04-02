@@ -4,15 +4,23 @@ extern crate pid_control;
 extern crate num;
 extern crate rand;
 extern crate csv;
+extern crate protobuf;
+extern crate flate2;
+extern crate time;
+extern crate crc;
+extern crate byteorder;
 
 pub mod simulation;
 pub mod trajectory;
 pub mod base;
+pub mod results;
+pub mod tf_record;
 
 use trajectory::UniformResolutionTrajectory;
 use simulation::{Simulation, SimulationResult};
 use clap::{App, Arg, SubCommand};
 use std::path::{Path, PathBuf};
+use tf_record::{ResultsWriter};
 
 fn main() {
     let matches = App::new("datagen")
@@ -81,6 +89,36 @@ fn main() {
                 .help("Output directory to place generated trajectories in")
                 .required(true))
         )
+        .subcommand(SubCommand::with_name("gen-tf-data")
+            .about("Generates TFRecord trajectory data")
+            .arg(Arg::with_name("length")
+                .short("l")
+                .long("length")
+                .takes_value(true)
+                .help("Sets the (minimum) length of the generated trajectory, in seconds"))
+            .arg(Arg::with_name("variability")
+                .short("v")
+                .long("variability")
+                .takes_value(true)
+                .help("Sets variability of the trajectory"))
+            .arg(Arg::with_name("rsd")
+                .short("r")
+                .long("rsd")
+                .takes_value(true)
+                .help("Sets rsd of the trajectory"))
+            .arg(Arg::with_name("num")
+                .short("n")
+                .long("num-trajectories")
+                .takes_value(true)
+                .help("How many trajectories to generate")
+                .required(true))
+            .arg(Arg::with_name("output_dir")
+                .short("o")
+                .long("output-dir")
+                .takes_value(true)
+                .help("Output directory to place generated trajectories in")
+                .required(true))
+        )
         .get_matches();
 
     match matches.subcommand() {
@@ -100,7 +138,15 @@ fn main() {
             let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
             let out = m.value_of("output_dir").unwrap();
             data_gen(length, variability, rsd, num, out);
-        }
+        },
+        ("gen-tf-data", Some(m)) => {
+            let length = m.value_of("length").map_or(10., |s| s.parse::<f64>().unwrap());
+            let variability = m.value_of("variability").map_or(2., |s| s.parse::<f64>().unwrap());
+            let rsd = m.value_of("rsd").map_or(0.1, |s| s.parse::<f64>().unwrap());
+            let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
+            let out = m.value_of("output_dir").unwrap();
+            tf_data_gen(length, variability, rsd, num, out).unwrap();
+        },
         _ => eprintln!("Command needs to be specified. Use `--help` to view usage.")
     }
 }
@@ -125,6 +171,44 @@ fn traj_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
         writer.flush().unwrap();
     }
     println!("\nDone!");
+}
+
+fn tf_data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) -> tf_record::TfRecordResult<()> {
+    let max_speed = 0.5;
+    let num_len = num.to_string().len();
+    let mut writer = ResultsWriter::from_path(out)?;
+
+    for i in 0..num {
+        print!("\rWorking... [{:0width$}/{:0width$}]", i+1, num, width = num_len);
+        let trajectory = trajectory::generate_1d_trajectory_points_simple(max_speed, length, variability, rsd);
+        let resolution = 1. / 10.;
+        let trajectory_mode = simulation::LeaderTrajectoryMode::Follow;
+        let converted_trajectory = trajectory::NaiveTrajectory::from_points(resolution, trajectory);
+
+        // simulate
+        let cparams = simulation::PControllerParams::default();
+        let controllers = vec![
+            simulation::PController::new(cparams),
+            simulation::PController::new(cparams)
+        ];
+        let formation = simulation::SimpleFormation::new(2, 0., vec![0.2, 0.]);
+        let simulation0 =
+            simulation::SimpleSimulation::new(2, 0, controllers.clone(), &formation,
+                                              &converted_trajectory, trajectory_mode);
+        let simulation1 =
+            simulation::SimpleSimulation::new(2, 1, controllers, &formation,
+                                              &converted_trajectory, trajectory_mode);
+        let mut observer = simulation::SimpleObserver::new(0.05);
+        //let mut observer = simulation::PerfectObserver {};
+        let result0 = simulation0.run(10., resolution, &mut observer);
+        let result1 = simulation1.run(10., resolution, &mut observer);
+
+        writer.write_record(result0, 0)?;
+        writer.write_record(result1, 1)?;
+    }
+    println!("\nDone!");
+
+    Ok(())
 }
 
 fn data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
