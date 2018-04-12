@@ -59,6 +59,41 @@ fn main() {
                 .help("Output directory to place generated trajectories in")
                 .required(true))
         )
+        .subcommand(SubCommand::with_name("gen-traj-2d")
+            .about("Generates 2D reference trajectories")
+            .arg(Arg::with_name("length")
+                .short("l")
+                .long("length")
+                .takes_value(true)
+                .help("Sets the (minimum) length of the generated trajectory, in seconds"))
+            .arg(Arg::with_name("variability")
+                .short("v")
+                .long("variability")
+                .takes_value(true)
+                .help("Sets variability of the trajectory"))
+            .arg(Arg::with_name("rsd")
+                .short("r")
+                .long("rsd")
+                .takes_value(true)
+                .help("Sets rsd of the trajectory"))
+            .arg(Arg::with_name("turnability")
+                .short("t")
+                .long("turnability")
+                .takes_value(true)
+                .help("Sets turnability of the trajectory"))
+            .arg(Arg::with_name("num")
+                .short("n")
+                .long("num-trajectories")
+                .takes_value(true)
+                .help("How many trajectories to generate")
+                .required(true))
+            .arg(Arg::with_name("output_dir")
+                .short("o")
+                .long("output-dir")
+                .takes_value(true)
+                .help("Output directory to place generated trajectories in")
+                .required(true))
+        )
         .subcommand(SubCommand::with_name("gen-data")
             .about("Generates trajectory data")
             .arg(Arg::with_name("length")
@@ -131,6 +166,15 @@ fn main() {
             let out = m.value_of("output_dir").unwrap();
             traj_gen(length, variability, rsd, num, out);
         },
+        ("gen-traj-2d", Some(m)) => {
+            let length = m.value_of("length").map_or(10., |s| s.parse::<f64>().unwrap());
+            let variability = m.value_of("variability").map_or(2., |s| s.parse::<f64>().unwrap());
+            let rsd = m.value_of("rsd").map_or(0.1, |s| s.parse::<f64>().unwrap());
+            let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
+            let out = m.value_of("output_dir").unwrap();
+            let turnability = m.value_of("turnability").map_or(1., |s| s.parse::<f64>().unwrap());
+            traj_gen_2d(length, variability, rsd, turnability, num, out);
+        },
         ("gen-data", Some(m)) => {
             let length = m.value_of("length").map_or(10., |s| s.parse::<f64>().unwrap());
             let variability = m.value_of("variability").map_or(2., |s| s.parse::<f64>().unwrap());
@@ -167,6 +211,28 @@ fn traj_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
         writer.write_record(&["t", "x"]).unwrap();
         for &(t, r) in trajectory.iter() {
             writer.write_record(&[t.to_string(), r.to_string()]).unwrap();
+        }
+        writer.flush().unwrap();
+    }
+    println!("\nDone!");
+}
+
+fn traj_gen_2d(length: f64, variability: f64, rsd: f64, turnability: f64, num: usize, out: &str) {
+    let max_speed = 0.5;
+    let num_len = num.to_string().len();
+    let out_dir_path = Path::new(out);
+    std::fs::create_dir_all(out_dir_path).unwrap();
+
+    for i in 0..num {
+        print!("\rWorking... [{:0width$}/{:0width$}]", i+1, num, width = num_len);
+        let trajectory = trajectory::generate_2d_trajectory_points_simple(max_speed, length, variability, rsd, turnability);
+
+        // write to a test path
+        let file_name = format!("traj_{:0width$}.csv", i, width = num_len);
+        let mut writer = csv::Writer::from_path(out_dir_path.join(&file_name)).unwrap();
+        writer.write_record(&["t", "x", "y"]).unwrap();
+        for &(t, r) in trajectory.iter() {
+            writer.write_record(&[t.to_string(), r.x.to_string(), r.y.to_string()]).unwrap();
         }
         writer.flush().unwrap();
     }

@@ -1,8 +1,10 @@
 use base::*;
 use std::ops::Index;
 use rand::{SmallRng, SeedableRng, thread_rng, Rng};
-use rand::distributions::{Normal, Distribution};
+use rand::distributions::{Normal, Distribution, Uniform};
 use std::ops::Range;
+use std::f64::consts::PI;
+use num::Zero;
 
 #[derive(Clone, Debug)]
 pub struct NaiveTrajectory<S: Vector>(Seconds, Vec<S>);
@@ -125,6 +127,42 @@ pub fn generate_1d_trajectory_points_simple(max_speed: MetresPerSecond, min_leng
         if seg_length <= 0. { continue }
         cur_time += seg_length;
         let velocity = generator.gen_speed(&mut rng);
+        cur_pos += velocity * seg_length;
+        points.push((cur_time, cur_pos));
+    }
+
+    points
+}
+
+
+/// A version of `generate_1d_trajectory_points_simple` adapted for 2D.
+pub fn generate_2d_trajectory_points_simple(max_speed: MetresPerSecond, min_length: Seconds, variability: f64, rsd: f64, turnability: f64) -> Vec<(Seconds, Metres2D)> {
+    let mut rng = SmallRng::from_rng(thread_rng()).unwrap();
+    let segment_length_dist = {
+        let mean = min_length / variability;
+        let sd = mean * rsd;
+        Normal::new(mean, sd)
+    };
+    let heading_dist = Normal::new(0., turnability);
+    let speed_generator = SpeedGenerator::new(max_speed, 0.2, 0.7, 0.85);
+    let mut cur_time = 0.;
+    let mut cur_pos = Metres2D::zero();
+    let mut cur_heading = {
+        let sample: f64 = rng.sample(Uniform);
+        (sample * 2. * PI) - PI
+    };
+    let mut points = vec![(cur_time, cur_pos)];
+
+    while cur_time < min_length {
+        let seg_length = segment_length_dist.sample(&mut rng);
+        if seg_length <= 0. { continue }
+        cur_time += seg_length;
+        let speed = speed_generator.gen_speed(&mut rng);
+        cur_heading += heading_dist.sample(&mut rng);
+        let velocity = PolarMetres2D {
+            r: speed,
+            theta: cur_heading
+        }.to_cartesian();
         cur_pos += velocity * seg_length;
         points.push((cur_time, cur_pos));
     }
