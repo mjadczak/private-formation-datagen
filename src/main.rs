@@ -1,4 +1,3 @@
-#[macro_use]
 extern crate clap;
 extern crate pid_control;
 extern crate num;
@@ -13,13 +12,11 @@ extern crate byteorder;
 pub mod simulation;
 pub mod trajectory;
 pub mod base;
-pub mod results;
 pub mod tf_record;
 
-use trajectory::UniformResolutionTrajectory;
 use simulation::{Simulation, SimulationResult};
 use clap::{App, Arg, SubCommand};
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use tf_record::{ResultsWriter};
 
 fn main() {

@@ -2,7 +2,6 @@ use base::*;
 use std::ops::Index;
 use rand::{SmallRng, SeedableRng, thread_rng, Rng};
 use rand::distributions::{Normal, Distribution, Uniform};
-use std::ops::Range;
 use std::f64::consts::PI;
 use num::Zero;
 

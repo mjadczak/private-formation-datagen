@@ -482,7 +482,7 @@ impl<C, S, Se> Simulation<S> for SimpleSimulation<S, C, Se>
             // Also, record the current position at this step into the results
             // Vel is kept at 0 in the case of DefinedTrajectory, so this is fine
             for ((mut pos, vel), mut result) in self.current_pos.iter_mut().zip(self.current_vel.iter()).zip(self.results.iter_mut()) {
-                *pos += (*vel * time_step);
+                *pos += *vel * time_step;
                 result.push(observer.observe(*pos));
             }
 

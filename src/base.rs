@@ -1,5 +1,5 @@
 use std::ops::*;
-use num::{Zero, One};
+use num::{Zero};
 
 pub trait Vector: PartialEq + Add<Output=Self> + Sub<Output=Self> + AddAssign + SubAssign + MulAssign<f64> + DivAssign<f64> + Mul<f64, Output=Self> + Div<f64, Output=Self> + PartialOrd + Sized + Copy + Zero {
     fn length(&self) -> f64;
