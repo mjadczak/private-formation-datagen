@@ -205,8 +205,8 @@ pub enum LeaderTrajectoryMode {
     Follow,
 }
 
-pub trait DistanceSensor {
-    fn sense(&mut self, true_d: f64) -> f64;
+pub trait DistanceSensor<S> {
+    fn sense(&mut self, true_d: S) -> S;
 }
 
 pub struct SharpIrSensor {
@@ -218,6 +218,19 @@ impl SharpIrSensor {
         let rng = SmallRng::new();
         SharpIrSensor { rng }
     }
+
+    pub fn clone_exact(&self) -> SharpIrSensor {
+        SharpIrSensor {
+            rng: self.rng.clone()
+        }
+    }
+}
+
+impl Clone for SharpIrSensor {
+    fn clone(&self) -> Self {
+        // Seed the rng anew
+        Self::new()
+    }
 }
 
 impl Default for SharpIrSensor {
@@ -228,7 +241,7 @@ impl Default for SharpIrSensor {
 
 const SHARP_IR_EQN: [f64; 3] = [-0.020077009250469, 0.120573832696841, 0.003295559781587];
 
-impl DistanceSensor for SharpIrSensor {
+impl DistanceSensor<f64> for SharpIrSensor {
     fn sense(&mut self, true_d: f64) -> f64 {
         let d2 = true_d * true_d;
         let d3 = true_d * d2;
@@ -269,6 +282,17 @@ impl Observer<Metres> for SimpleObserver {
     }
 }
 
+impl Observer<Metres2D> for SimpleObserver {
+    fn observe(&mut self, true_pos: Metres2D) -> Metres2D {
+        let error_x = self.rng.sample(StandardNormal) * self.sd;
+        let error_y = self.rng.sample(StandardNormal) * self.sd;
+        true_pos + Metres2D {
+            x: error_x,
+            y: error_y,
+        }
+    }
+}
+
 pub struct PerfectObserver {}
 
 impl<S: Vector> Observer<S> for PerfectObserver {
@@ -278,34 +302,40 @@ impl<S: Vector> Observer<S> for PerfectObserver {
 }
 
 /// Simple simulation in Metres and Seconds which uses the same controller for every robot
-pub struct SimpleSimulation<C: Controller<Metres>> {
+pub struct SimpleSimulation<S: Vector, C: Controller<S>, Se: DistanceSensor<S>> {
     num_robots: usize,
     leader_id: usize,
     controllers: Vec<C>,
-    results: Vec<Vec<Metres>>,
-    current_pos: Vec<Metres>,
-    current_vel: Vec<MetresPerSecond>,
-    trajectory: NaiveTrajectory<Metres>,
-    trajectory_origin: Metres,
+    results: Vec<Vec<S>>,
+    current_pos: Vec<S>,
+    current_vel: Vec<S>,
+    trajectory: NaiveTrajectory<S>,
+    trajectory_origin: S,
     follow_mode: LeaderTrajectoryMode,
+    sensors: Vec<Se>,
 }
 
-impl<C> SimpleSimulation<C>
-    where C: Controller<Metres>
+impl<C, S, Se> SimpleSimulation<S, C, Se>
+    where
+        S: Vector,
+        C: Controller<S>,
+        Se: DistanceSensor<S>
 {
-    pub fn new<CI: IntoIterator<Item=C>, F: Formation<Metres>>(num_robots: usize,
+    pub fn new<CI: IntoIterator<Item=C>, SI: IntoIterator<Item=Se>, F: Formation<S>>(num_robots: usize,
                                                                leader_id: usize,
-                                                               controllers: CI, formation: &F,
-                                                               trajectory: &NaiveTrajectory<Metres>,
+                                                               sensors: SI, controllers: CI, formation: &F,
+                                                               trajectory: &NaiveTrajectory<S>,
                                                                follow_mode: LeaderTrajectoryMode)
                                                                -> Self {
         let mut controllers: Vec<C> = controllers.into_iter().collect();
+        let sensors: Vec<Se> = sensors.into_iter().collect();
         assert!(leader_id < num_robots);
         assert!(num_robots > 0);
         assert_eq!(controllers.len(), num_robots);
+        assert_eq!(sensors.len(), num_robots);
         assert_eq!(formation.num_robots(), num_robots);
         assert_eq!(formation.positions().len(), num_robots);
-        let current_pos: Vec<Metres> = formation.positions().iter().map(|pos| pos - formation.origin()).collect();
+        let current_pos: Vec<S> = formation.positions().iter().map(|pos| *pos - formation.origin()).collect();
 
         // Set targets for controllers
         let leader_pos = current_pos[leader_id];
@@ -319,22 +349,26 @@ impl<C> SimpleSimulation<C>
             controllers,
             results: vec![Vec::new(); num_robots],
             current_pos,
-            current_vel: vec![0.; num_robots],
+            current_vel: vec![S::zero(); num_robots],
             trajectory: trajectory.clone(),
             trajectory_origin: leader_pos,
             follow_mode,
+            sensors,
         }
     }
 }
 
-impl<C> Simulation<Metres> for SimpleSimulation<C>
-    where C: Controller<Metres>
+impl<C, S, Se> Simulation<S> for SimpleSimulation<S, C, Se>
+    where
+        S: Vector,
+        C: Controller<S>,
+        Se: DistanceSensor<S>
 {
-    type Result = SimpleSimulationResult<Metres>;
+    type Result = SimpleSimulationResult<S>;
 
     /// Runs the entire simulation synchronously.
     /// Runs for an integer number of `time_step`s, potentially stopping past `total_time` if they are not multiples
-    fn run(mut self, total_time: Seconds, time_step: Seconds, observer: &mut Observer<Metres>) -> SimpleSimulationResult<Metres> {
+    fn run(mut self, total_time: Seconds, time_step: Seconds, observer: &mut Observer<S>) -> SimpleSimulationResult<S> {
         assert_eq!(self.trajectory.time_step(), time_step);
         // +1 since `num_steps` is really the number of data points, and the number of steps is one less than that.
         let num_steps: usize = ((total_time / time_step).ceil() as usize) + 1;
@@ -343,12 +377,6 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
         // Allocate space
         for res_vec in self.results.iter_mut() {
             res_vec.reserve(num_steps);
-        }
-
-        // TODO: make the sensors configurable (possibly per-robot?)
-        let mut sensors: Vec<SharpIrSensor> = Vec::with_capacity(self.num_robots);
-        for _ in 0..self.num_robots {
-            sensors.push(SharpIrSensor::new())
         }
 
         for step in 0..num_steps {
@@ -363,7 +391,7 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
             // Also, record the current position at this step into the results
             // Vel is kept at 0 in the case of DefinedTrajectory, so this is fine
             for ((mut pos, vel), mut result) in self.current_pos.iter_mut().zip(self.current_vel.iter()).zip(self.results.iter_mut()) {
-                *pos += vel;
+                *pos = *pos + (*vel * time_step);
                 result.push(observer.observe(*pos));
             }
 
@@ -380,7 +408,7 @@ impl<C> Simulation<Metres> for SimpleSimulation<C>
                         leader_pos
                     };
                 let target_distance = target_pos - self.current_pos[id];
-                let sensed_distance = sensors[id].sense(target_distance);
+                let sensed_distance = self.sensors[id].sense(target_distance);
                 *velocity = controller.take_step(sensed_distance, time_step);
             }
         }

@@ -191,12 +191,16 @@ fn tf_data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) -
             simulation::PController::new(cparams),
             simulation::PController::new(cparams)
         ];
+        let sensors = vec![
+            simulation::SharpIrSensor::new(),
+            simulation::SharpIrSensor::new(),
+        ];
         let formation = simulation::SimpleFormation::new(2, 0., vec![0.2, 0.]);
         let simulation0 =
-            simulation::SimpleSimulation::new(2, 0, controllers.clone(), &formation,
+            simulation::SimpleSimulation::new(2, 0, sensors.clone(), controllers.clone(), &formation,
                                               &converted_trajectory, trajectory_mode);
         let simulation1 =
-            simulation::SimpleSimulation::new(2, 1, controllers, &formation,
+            simulation::SimpleSimulation::new(2, 1, sensors, controllers, &formation,
                                               &converted_trajectory, trajectory_mode);
         let mut observer = simulation::SimpleObserver::new(0.05);
         //let mut observer = simulation::PerfectObserver {};
@@ -230,12 +234,16 @@ fn data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
             simulation::PController::new(cparams),
             simulation::PController::new(cparams)
         ];
+        let sensors = vec![
+            simulation::SharpIrSensor::new(),
+            simulation::SharpIrSensor::new(),
+        ];
         let formation = simulation::SimpleFormation::new(2, 0., vec![0.2, 0.]);
         let simulation0 =
-            simulation::SimpleSimulation::new(2, 0, controllers.clone(), &formation,
+            simulation::SimpleSimulation::new(2, 0, sensors.clone(), controllers.clone(), &formation,
                                               &converted_trajectory, trajectory_mode);
         let simulation1 =
-            simulation::SimpleSimulation::new(2, 1, controllers, &formation,
+            simulation::SimpleSimulation::new(2, 1, sensors, controllers, &formation,
                                               &converted_trajectory, trajectory_mode);
         let mut observer = simulation::SimpleObserver::new(0.05);
         //let mut observer = simulation::PerfectObserver {};
@@ -289,9 +297,13 @@ fn test_traj_gen() {
         simulation::PIDController::new(cparams),
         simulation::PIDController::new(cparams)
     ];
+    let sensors = vec![
+        simulation::SharpIrSensor::new(),
+        simulation::SharpIrSensor::new(),
+    ];
     let formation = simulation::SimpleFormation::new(2, 0., vec![0.2, 0.]);
     let simulation =
-        simulation::SimpleSimulation::new(2, leader_id, controllers, &formation,
+        simulation::SimpleSimulation::new(2, leader_id, sensors, controllers, &formation,
                                           &converted_trajectory, trajectory_mode);
     //let mut observer = simulation::SimpleObserver::new(0.1);
     let mut observer = simulation::PerfectObserver {};

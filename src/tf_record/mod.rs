@@ -95,10 +95,10 @@ pub struct ResultsWriter<S: Vector> {
     _marker: PhantomData<S>
 }
 
-impl ResultsWriter<Metres> {
+impl<S: Vector> ResultsWriter<S> {
     /// Creates a new writer from a new output path.
     /// This path must be a folder, but does not have to exist.
-    pub fn from_path<P: AsRef<Path>>(path: P) -> TfRecordResult<ResultsWriter<Metres>> {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> TfRecordResult<ResultsWriter<S>> {
         let path = path.as_ref();
         if path.exists() && !path.is_dir() {
             return Err(TfRecordError::from_str("the input path must be a directory"));
@@ -108,7 +108,7 @@ impl ResultsWriter<Metres> {
         assert!(file_path.set_extension("tfrecord"));
         let writer = fs::File::create(&file_path)?;
 
-        Ok(ResultsWriter::<Metres> {
+        Ok(ResultsWriter::<S> {
             info: None,
             out_stream: ZlibEncoder::new(writer, Default::default()),
             file_path,
@@ -116,7 +116,7 @@ impl ResultsWriter<Metres> {
         })
     }
 
-    pub fn write_record<R: simulation::SimulationResult<Metres>>(&mut self, result: R, leader_number: usize) -> TfRecordResult<()> {
+    pub fn write_record<R: simulation::SimulationResult<S>>(&mut self, result: R, leader_number: usize) -> TfRecordResult<()> {
         // check that all the static info is still the same
         self.verify_info(&result)?;
 
@@ -132,17 +132,28 @@ impl ResultsWriter<Metres> {
         let mut leader_num_feature = Feature::new();
         leader_num_feature.set_int64_list(leader_num_list);
         features.insert("leader_number".to_string(), leader_num_feature);
+        let features_per_robot = S::repr_length();
 
         // add the trajectory features per robot
         for (i, x) in data.into_iter().enumerate() {
-            let mut feature_list = FloatList::new();
-            feature_list.set_value(x.into_iter().map(|v| v as f32).collect());
+            let mut feature_lists: Vec<Vec<f32>> = Vec::with_capacity(features_per_robot);
+            feature_lists.resize(features_per_robot, Vec::new());
 
-            let mut feature = Feature::new();
-            feature.set_float_list(feature_list);
+            for pos in x {
+                let repr = pos.repr();
+                for j in 0..features_per_robot {
+                    feature_lists[j].push(repr[j] as f32);
+                }
+            }
 
-            let key = format!("x{}", i);
-            features.insert(key, feature);
+            for (dim, list) in feature_lists.into_iter().enumerate() {
+                let mut feature_list = FloatList::new();
+                feature_list.set_value(list);
+                let mut feature = Feature::new();
+                feature.set_float_list(feature_list);
+                let key = format!("x{}_{}", i, dim);
+                features.insert(key, feature);
+            }
         }
 
         // make the example
@@ -178,7 +189,7 @@ impl ResultsWriter<Metres> {
         time::strftime("dg_%Y-%m-%d_%H-%M-%S", &time::now()).unwrap()
     }
 
-    fn verify_info<R: simulation::SimulationResult<Metres>>(&mut self, result: &R) -> TfRecordResult<()> {
+    fn verify_info<R: simulation::SimulationResult<S>>(&mut self, result: &R) -> TfRecordResult<()> {
         let cmp = DataInfo {
             time_step: result.time_step(),
             num_robots: result.num_robots(),
