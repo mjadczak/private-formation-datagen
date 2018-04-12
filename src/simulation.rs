@@ -172,6 +172,59 @@ impl Controller<f64> for PIDController {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct UniformPIDController2D {
+    controller_x: PIDControllerImpl,
+    controller_y: PIDControllerImpl,
+    params: PIDControllerParams,
+}
+
+impl UniformPIDController2D {
+    pub fn new(params: PIDControllerParams) -> Self {
+        let mut controller_x = PIDControllerImpl::new(params.p_gain, params.i_gain, params.d_gain);
+        let mut controller_y = PIDControllerImpl::new(params.p_gain, params.i_gain, params.d_gain);
+        controller_x.set_limits(params.vel_limits.0, params.vel_limits.1);
+        controller_y.set_limits(params.vel_limits.0, params.vel_limits.1);
+        UniformPIDController2D {
+            controller_x,
+            controller_y,
+            params,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.controller_x.reset();
+        self.controller_y.reset();
+    }
+}
+
+impl Controller<Metres2D> for UniformPIDController2D {
+    type Params = PIDControllerParams;
+
+    fn params(&self) -> PIDControllerParams {
+        self.params
+    }
+
+    fn target(&self) -> Metres2D {
+        Metres2D {
+            x: self.controller_x.target(),
+            y: self.controller_y.target()
+        }
+    }
+
+    fn set_target(&mut self, target: Metres2D) {
+        self.controller_x.set_target(target.x);
+        self.controller_y.set_target(target.y);
+    }
+
+    fn take_step(&mut self, distance: Metres2D, time_step: Seconds) -> Metres2DPerSecond {
+        Metres2D {
+            x: self.controller_x.update(distance.x, time_step),
+            y: self.controller_y.update(distance.y, time_step),
+        }
+    }
+}
+
 pub struct SimpleSimulationResult<S: Vector>(Seconds, Vec<Vec<S>>);
 
 impl<S: Vector> SimulationResult<S> for SimpleSimulationResult<S> {
@@ -239,15 +292,53 @@ impl Default for SharpIrSensor {
     }
 }
 
-const SHARP_IR_EQN: [f64; 3] = [-0.020077009250469, 0.120573832696841, 0.003295559781587];
-
 impl DistanceSensor<f64> for SharpIrSensor {
     fn sense(&mut self, true_d: f64) -> f64 {
+        const SHARP_IR_EQN: [f64; 3] = [-0.020077009250469, 0.120573832696841, 0.003295559781587];
         let d2 = true_d * true_d;
         let d3 = true_d * d2;
         let sd = d3 * SHARP_IR_EQN[0] + d2 * SHARP_IR_EQN[1] + true_d * SHARP_IR_EQN[0];
         let error = self.rng.sample(StandardNormal) * sd;
         true_d + error
+    }
+}
+
+pub struct CombinedIrEncoderSensor {
+    distance_sensor: SharpIrSensor,
+    rng: SmallRng,
+}
+
+impl CombinedIrEncoderSensor {
+    pub fn new() -> CombinedIrEncoderSensor {
+        CombinedIrEncoderSensor {
+            distance_sensor: SharpIrSensor::new(),
+            rng: SmallRng::new(),
+        }
+    }
+
+    pub fn clone_exact(&self) -> CombinedIrEncoderSensor {
+        CombinedIrEncoderSensor {
+            distance_sensor: self.distance_sensor.clone_exact(),
+            rng: self.rng.clone(),
+        }
+    }
+}
+
+impl Clone for CombinedIrEncoderSensor {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl DistanceSensor<Metres2D> for CombinedIrEncoderSensor {
+    fn sense(&mut self, true_d: Metres2D) -> Metres2D {
+        const ANGLE_SD: f64 = 0.004363323 / 1.96;
+        let mut polar = true_d.to_polar();
+        // apply distance noise
+        polar.r = self.distance_sensor.sense(polar.r);
+        // apply angle noise
+        polar.theta += self.rng.sample(StandardNormal) * ANGLE_SD;
+        polar.to_cartesian()
     }
 }
 

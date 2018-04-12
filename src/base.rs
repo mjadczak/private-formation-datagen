@@ -30,7 +30,7 @@ impl Vector for f64 {
 #[derive(PartialEq, PartialOrd, Copy, Clone, Debug)]
 pub struct Metres2D {
     pub x: f64,
-    pub y: f64
+    pub y: f64,
 }
 
 pub type Metres2DPerSecond = Metres2D;
@@ -103,5 +103,28 @@ impl Vector for Metres2D {
 
     fn repr(&self) -> Vec<f64> {
         vec![self.x, self.y]
+    }
+}
+
+pub struct PolarMetres2D {
+    pub theta: f64,
+    pub r: f64,
+}
+
+impl PolarMetres2D {
+    pub fn to_cartesian(&self) -> Metres2D {
+        Metres2D {
+            x: self.r * self.theta.cos(),
+            y: self.r * self.theta.sin(),
+        }
+    }
+}
+
+impl Metres2D {
+    pub fn to_polar(&self) -> PolarMetres2D {
+        PolarMetres2D {
+            theta: self.y.atan2(self.x),
+            r: self.length(),
+        }
     }
 }
