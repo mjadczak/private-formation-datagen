@@ -6,21 +6,21 @@ mod feature;
 pub use self::example::*;
 pub use self::feature::*;
 
-use std::path::{Path, PathBuf};
-use std::io;
-use std::fs;
-use std::io::prelude::*;
+use byteorder::{WriteBytesExt, LE};
+use crc::crc32;
 use flate2::write::ZlibEncoder;
-use time;
-use std::marker::PhantomData;
+use protobuf::{self, Message};
 use simulation;
 use std::collections::HashMap;
-use protobuf::{self, Message};
 use std::error::Error;
-use std::mem::size_of;
-use crc::crc32;
-use byteorder::{WriteBytesExt, LE};
 use std::fmt;
+use std::fs;
+use std::io;
+use std::io::prelude::*;
+use std::marker::PhantomData;
+use std::mem::size_of;
+use std::path::{Path, PathBuf};
+use time;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 struct DataInfo {
@@ -34,9 +34,7 @@ struct DataInfo {
 pub enum TfRecordError {
     IoError(io::Error),
     ProtobufError(protobuf::ProtobufError),
-    ArgumentError {
-        message: &'static str
-    }
+    ArgumentError { message: &'static str },
 }
 
 use self::TfRecordError::*;
@@ -45,9 +43,7 @@ pub type TfRecordResult<T> = Result<T, TfRecordError>;
 
 impl TfRecordError {
     pub fn from_str(message: &'static str) -> TfRecordError {
-        ArgumentError {
-            message
-        }
+        ArgumentError { message }
     }
 }
 
@@ -56,7 +52,7 @@ impl Error for TfRecordError {
         match self {
             &ArgumentError { message: m } => m,
             &IoError(_) => "IO error",
-            &ProtobufError(_) => "ProtoBuf error: {}"
+            &ProtobufError(_) => "ProtoBuf error: {}",
         }
     }
 
@@ -64,7 +60,7 @@ impl Error for TfRecordError {
         match self {
             &ArgumentError { .. } => None,
             &ProtobufError(ref e) => Some(e),
-            &IoError(ref e) => Some(e)
+            &IoError(ref e) => Some(e),
         }
     }
 }
@@ -92,7 +88,7 @@ pub struct ResultsWriter<S: Vector> {
     info: Option<DataInfo>,
     out_stream: ZlibEncoder<fs::File>,
     file_path: PathBuf,
-    _marker: PhantomData<S>
+    _marker: PhantomData<S>,
 }
 
 impl<S: Vector> ResultsWriter<S> {
@@ -101,7 +97,9 @@ impl<S: Vector> ResultsWriter<S> {
     pub fn from_path<P: AsRef<Path>>(path: P) -> TfRecordResult<ResultsWriter<S>> {
         let path = path.as_ref();
         if path.exists() && !path.is_dir() {
-            return Err(TfRecordError::from_str("the input path must be a directory"));
+            return Err(TfRecordError::from_str(
+                "the input path must be a directory",
+            ));
         }
         fs::create_dir_all(path)?;
         let mut file_path = path.join(Self::get_prefix());
@@ -116,7 +114,11 @@ impl<S: Vector> ResultsWriter<S> {
         })
     }
 
-    pub fn write_record<R: simulation::SimulationResult<S>>(&mut self, result: R, leader_number: usize) -> TfRecordResult<()> {
+    pub fn write_record<R: simulation::SimulationResult<S>>(
+        &mut self,
+        result: R,
+        leader_number: usize,
+    ) -> TfRecordResult<()> {
         // check that all the static info is still the same
         self.verify_info(&result)?;
 
@@ -164,8 +166,6 @@ impl<S: Vector> ResultsWriter<S> {
 
         let data_length = example.compute_size() as u64;
 
-
-
         // Format of a single record:
         // all fields little-endian
         //  uint64    length
@@ -174,7 +174,8 @@ impl<S: Vector> ResultsWriter<S> {
         //  uint32    masked crc of data
 
         self.out_stream.write_u64::<LE>(data_length)?;
-        self.out_stream.write_u32::<LE>(masked_crc32c_u64(data_length))?;
+        self.out_stream
+            .write_u32::<LE>(masked_crc32c_u64(data_length))?;
         let data_crc = {
             let mut writer = Crc32CWriter::new(&mut self.out_stream);
             example.write_to_writer(&mut writer)?;
@@ -189,11 +190,14 @@ impl<S: Vector> ResultsWriter<S> {
         time::strftime("dg_%Y-%m-%d_%H-%M-%S", &time::now()).unwrap()
     }
 
-    fn verify_info<R: simulation::SimulationResult<S>>(&mut self, result: &R) -> TfRecordResult<()> {
+    fn verify_info<R: simulation::SimulationResult<S>>(
+        &mut self,
+        result: &R,
+    ) -> TfRecordResult<()> {
         let cmp = DataInfo {
             time_step: result.time_step(),
             num_robots: result.num_robots(),
-            num_steps: result.num_steps()
+            num_steps: result.num_steps(),
         };
 
         // if empty, insert and comparison will succeed
@@ -201,7 +205,9 @@ impl<S: Vector> ResultsWriter<S> {
         if *self.info.get_or_insert(cmp) == cmp {
             Ok(())
         } else {
-            Err(TfRecordError::from_str("all records written to a single file must have the same static parameters"))
+            Err(TfRecordError::from_str(
+                "all records written to a single file must have the same static parameters",
+            ))
         }
     }
 }
@@ -213,7 +219,12 @@ impl<S: Vector> Drop for ResultsWriter<S> {
         }
         let info = self.info.unwrap();
         // writer automatically gets dropped and saves off, but we need to save off the info file
-        let data_file_name = self.file_path.file_name().unwrap().to_str().unwrap().to_string();
+        let data_file_name = self.file_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert!(self.file_path.set_extension("dginfo"));
         let mut file = fs::File::create(&self.file_path).unwrap();
         // todo YAML
@@ -246,10 +257,7 @@ struct Crc32CWriter<'w, W: Write + 'w> {
 
 impl<'w, W: Write + 'w> Crc32CWriter<'w, W> {
     pub fn new(writer: &'w mut W) -> Crc32CWriter<'w, W> {
-        Crc32CWriter {
-            writer,
-            value: 0
-        }
+        Crc32CWriter { writer, value: 0 }
     }
 
     pub fn reset(&mut self) {

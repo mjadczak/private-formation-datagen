@@ -1,7 +1,21 @@
+use num::Zero;
 use std::ops::*;
-use num::{Zero};
 
-pub trait Vector: PartialEq + Add<Output=Self> + Sub<Output=Self> + AddAssign + SubAssign + MulAssign<f64> + DivAssign<f64> + Mul<f64, Output=Self> + Div<f64, Output=Self> + PartialOrd + Sized + Copy + Zero {
+pub trait Vector:
+    PartialEq
+    + Add<Output = Self>
+    + Sub<Output = Self>
+    + AddAssign
+    + SubAssign
+    + MulAssign<f64>
+    + DivAssign<f64>
+    + Mul<f64, Output = Self>
+    + Div<f64, Output = Self>
+    + PartialOrd
+    + Sized
+    + Copy
+    + Zero
+{
     fn length(&self) -> f64;
 
     fn repr_length() -> usize;
@@ -81,10 +95,7 @@ impl Div<f64> for Metres2D {
 
 impl Zero for Metres2D {
     fn zero() -> Self {
-        Metres2D {
-            x: 0.,
-            y: 0.,
-        }
+        Metres2D { x: 0., y: 0. }
     }
 
     fn is_zero(&self) -> bool {
