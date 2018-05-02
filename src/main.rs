@@ -8,17 +8,23 @@ extern crate pid_control;
 extern crate protobuf;
 extern crate rand;
 extern crate time;
+extern crate serde_yaml;
+#[macro_use]
+extern crate serde_derive;
 
 pub mod base;
 pub mod simulation;
 pub mod tf_record;
 pub mod trajectory;
+pub mod tasks;
 
 use base::*;
 use clap::{App, Arg, SubCommand};
 use num::Zero;
 use simulation::{Simulation, SimulationResult};
 use std::path::Path;
+use std::fs::File;
+use std::io::Read;
 use tf_record::ResultsWriter;
 
 fn main() {
@@ -246,6 +252,18 @@ fn main() {
                         .required(true),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("task")
+                .about("Executes a YAML task file")
+                .arg(
+                    Arg::with_name("file")
+                        .short("f")
+                        .long("file")
+                        .takes_value(true)
+                        .help("Sets the filepath of the task file")
+                        .required(true),
+                ),
+        )
         .get_matches();
 
     match matches.subcommand() {
@@ -303,6 +321,10 @@ fn main() {
             let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
             let out = m.value_of("output_dir").unwrap();
             tf_data_gen(length, variability, rsd, num, out).unwrap();
+        }
+        ("task", Some(m)) => {
+            let file = m.value_of("file").unwrap();
+            exec_task(file);
         }
         _ => eprintln!("Command needs to be specified. Use `--help` to view usage."),
     }
@@ -682,4 +704,11 @@ fn test_traj_gen() {
             .unwrap();
     }
     writer.flush().unwrap();
+}
+
+fn exec_task(file: &str) {
+    let mut contents = String::new();
+    File::open(file).unwrap().read_to_string(&mut contents).unwrap();
+    let task: tasks::ScenarioSpec = serde_yaml::from_str(&contents).unwrap();
+    println!("{:?}", task);
 }
