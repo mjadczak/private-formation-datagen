@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use time;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
-struct DataInfo {
+pub struct DataInfo {
     time_step: Seconds,
     num_steps: usize,
     num_robots: usize,
@@ -84,17 +84,17 @@ impl From<protobuf::ProtobufError> for TfRecordError {
 }
 
 #[derive(Debug)]
-pub struct ResultsWriter<S: Vector> {
+pub struct ResultsWriter<W: Write, S: Vector> {
     info: Option<DataInfo>,
-    out_stream: ZlibEncoder<fs::File>,
-    file_path: PathBuf,
+    out_stream: ZlibEncoder<W>,
+    file_path: Option<PathBuf>,
     _marker: PhantomData<S>,
 }
 
-impl<S: Vector> ResultsWriter<S> {
+impl<S: Vector> ResultsWriter<fs::File, S> {
     /// Creates a new writer from a new output path.
     /// This path must be a folder, but does not have to exist.
-    pub fn from_path<P: AsRef<Path>>(path: P) -> TfRecordResult<ResultsWriter<S>> {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> TfRecordResult<ResultsWriter<fs::File, S>> {
         let path = path.as_ref();
         if path.exists() && !path.is_dir() {
             return Err(TfRecordError::from_str(
@@ -106,10 +106,39 @@ impl<S: Vector> ResultsWriter<S> {
         assert!(file_path.set_extension("tfrecord"));
         let writer = fs::File::create(&file_path)?;
 
-        Ok(ResultsWriter::<S> {
+        Ok(ResultsWriter::<fs::File, S> {
             info: None,
             out_stream: ZlibEncoder::new(writer, Default::default()),
-            file_path,
+            file_path: Some(file_path),
+            _marker: Default::default(),
+        })
+    }
+
+    pub fn write_dginfo(&self) -> TfRecordResult<()> {
+        if let None = self.info {
+            return Err(TfRecordError::from_str("no info has been seen"));
+        }
+        let mut file_path = self.file_path.clone().unwrap();
+        let info = self.info.unwrap();
+        // writer automatically gets dropped and saves off, but we need to save off the info file
+        let data_file_name = file_path.file_name().unwrap().to_str().unwrap().to_string();
+        assert!(file_path.set_extension("dginfo"));
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(&mut file, "# datagen-info v0.1")?;
+        writeln!(&mut file, "time_step: {}", info.time_step)?;
+        writeln!(&mut file, "num_robots: {}", info.num_robots)?;
+        writeln!(&mut file, "num_steps: {}", info.num_steps)?;
+        writeln!(&mut file, "data_file: {}", data_file_name)?;
+        Ok(())
+    }
+}
+
+impl<W: Write, S: Vector> ResultsWriter<W, S> {
+    pub fn from_writer(writer: W) -> TfRecordResult<ResultsWriter<W, S>> {
+        Ok(ResultsWriter::<W, S> {
+            info: None,
+            out_stream: ZlibEncoder::new(writer, Default::default()),
+            file_path: None,
             _marker: Default::default(),
         })
     }
@@ -210,29 +239,19 @@ impl<S: Vector> ResultsWriter<S> {
             ))
         }
     }
-}
 
-impl<S: Vector> Drop for ResultsWriter<S> {
-    fn drop(&mut self) {
-        if let None = self.info {
-            return;
+    pub fn finish(mut self) -> TfRecordResult<(DataInfo, W)> {
+        let info = self.info;
+        self.info = None;
+        match info {
+            Some(info) => self.out_stream
+                .finish()
+                .map(|writer| (info, writer))
+                .map_err(|e| TfRecordError::from(e)),
+            None => Err(TfRecordError::from_str(
+                "no records have been written to this writer and no information was captured",
+            )),
         }
-        let info = self.info.unwrap();
-        // writer automatically gets dropped and saves off, but we need to save off the info file
-        let data_file_name = self.file_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-        assert!(self.file_path.set_extension("dginfo"));
-        let mut file = fs::File::create(&self.file_path).unwrap();
-        // todo YAML
-        writeln!(&mut file, "# datagen-info v0.1").unwrap();
-        writeln!(&mut file, "time_step: {}", info.time_step).unwrap();
-        writeln!(&mut file, "num_robots: {}", info.num_robots).unwrap();
-        writeln!(&mut file, "num_steps: {}", info.num_steps).unwrap();
-        writeln!(&mut file, "data_file: {}", data_file_name).unwrap();
     }
 }
 

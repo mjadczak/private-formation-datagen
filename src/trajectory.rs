@@ -1,6 +1,6 @@
 use base::*;
 use num::Zero;
-use rand::distributions::{Distribution, Normal, Uniform};
+use rand::distributions::{Distribution, Normal, Standard, Uniform};
 use rand::{thread_rng, Rng, SeedableRng, SmallRng};
 use std::f64::consts::PI;
 use std::ops::Index;
@@ -172,7 +172,7 @@ pub fn generate_2d_trajectory_points_simple(
     let mut cur_time = 0.;
     let mut cur_pos = Metres2D::zero();
     let mut cur_heading = {
-        let sample: f64 = rng.sample(Uniform);
+        let sample: f64 = rng.sample(Standard);
         (sample * 2. * PI) - PI
     };
     let mut points = vec![(cur_time, cur_pos)];

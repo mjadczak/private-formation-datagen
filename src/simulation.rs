@@ -1,13 +1,10 @@
 use base::*;
 use pid_control::{Controller as PIDControllerT, PIDController as PIDControllerImpl};
 use rand::distributions::StandardNormal;
-use rand::{NewRng, Rng, SmallRng};
+use rand::{FromEntropy, Rng, SmallRng};
 use trajectory::NaiveTrajectory;
 
 pub trait Controller<S: Vector>: Clone {
-    type Params: Clone + Default;
-
-    fn params(&self) -> Self::Params;
     fn target(&self) -> S;
     fn set_target(&mut self, target: S);
 
@@ -101,12 +98,6 @@ impl PController {
 }
 
 impl Controller<f64> for PController {
-    type Params = PControllerParams;
-
-    fn params(&self) -> PControllerParams {
-        self.params
-    }
-
     fn target(&self) -> Metres {
         self.controller.target()
     }
@@ -158,12 +149,6 @@ impl PIDController {
 }
 
 impl Controller<f64> for PIDController {
-    type Params = PIDControllerParams;
-
-    fn params(&self) -> PIDControllerParams {
-        self.params
-    }
-
     fn target(&self) -> Metres {
         self.controller.target()
     }
@@ -204,12 +189,6 @@ impl UniformPIDController2D {
 }
 
 impl Controller<Metres2D> for UniformPIDController2D {
-    type Params = PIDControllerParams;
-
-    fn params(&self) -> PIDControllerParams {
-        self.params
-    }
-
     fn target(&self) -> Metres2D {
         Metres2D {
             x: self.controller_x.target(),
@@ -263,7 +242,7 @@ pub enum LeaderTrajectoryMode {
     Follow,
 }
 
-pub trait DistanceSensor<S> {
+pub trait DistanceSensor<S>: Clone {
     fn sense(&mut self, true_d: S) -> S;
 }
 
@@ -273,7 +252,7 @@ pub struct SharpIrSensor {
 
 impl SharpIrSensor {
     pub fn new() -> SharpIrSensor {
-        let rng = SmallRng::new();
+        let rng = SmallRng::from_entropy();
         SharpIrSensor { rng }
     }
 
@@ -317,7 +296,7 @@ impl CombinedIrEncoderSensor {
     pub fn new() -> CombinedIrEncoderSensor {
         CombinedIrEncoderSensor {
             distance_sensor: SharpIrSensor::new(),
-            rng: SmallRng::new(),
+            rng: SmallRng::from_entropy(),
         }
     }
 
@@ -360,7 +339,7 @@ impl SimpleObserver {
     pub fn new(sd: f64) -> Self {
         SimpleObserver {
             sd,
-            rng: SmallRng::new(),
+            rng: SmallRng::from_entropy(),
         }
     }
 }

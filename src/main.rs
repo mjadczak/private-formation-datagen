@@ -7,27 +7,36 @@ extern crate num;
 extern crate pid_control;
 extern crate protobuf;
 extern crate rand;
-extern crate time;
 extern crate serde_yaml;
+extern crate time;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
+extern crate failure;
+#[macro_use]
+extern crate log;
+extern crate pretty_env_logger;
+#[macro_use]
+extern crate slugify;
 
 pub mod base;
 pub mod simulation;
+pub mod tasks;
 pub mod tf_record;
 pub mod trajectory;
-pub mod tasks;
 
 use base::*;
 use clap::{App, Arg, SubCommand};
 use num::Zero;
 use simulation::{Simulation, SimulationResult};
-use std::path::Path;
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use tf_record::ResultsWriter;
 
 fn main() {
+    pretty_env_logger::init();
+
     let matches = App::new("datagen")
         .version("0.1")
         .author("Matt Jadczak <mnj24@cam.ac.uk>")
@@ -324,7 +333,10 @@ fn main() {
         }
         ("task", Some(m)) => {
             let file = m.value_of("file").unwrap();
-            exec_task(file);
+            match exec_task(file) {
+                Ok(()) => return,
+                Err(err) => eprintln!("An error has occurred: {}", err),
+            }
         }
         _ => eprintln!("Command needs to be specified. Use `--help` to view usage."),
     }
@@ -456,6 +468,7 @@ fn tf_data_gen(
         writer.write_record(result0, 0)?;
         writer.write_record(result1, 1)?;
     }
+    writer.write_dginfo()?;
     println!("\nDone!");
 
     Ok(())
@@ -706,9 +719,10 @@ fn test_traj_gen() {
     writer.flush().unwrap();
 }
 
-fn exec_task(file: &str) {
+fn exec_task(file: &str) -> Result<(), failure::Error> {
     let mut contents = String::new();
-    File::open(file).unwrap().read_to_string(&mut contents).unwrap();
-    let task: tasks::ScenarioSpec = serde_yaml::from_str(&contents).unwrap();
-    println!("{:?}", task);
+    File::open(file).unwrap().read_to_string(&mut contents)?;
+    let task: tasks::ScenarioSpec = serde_yaml::from_str(&contents)?;
+    debug!("Processing task definition: {:?}", task);
+    task.execute()
 }
