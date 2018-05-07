@@ -33,6 +33,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use tf_record::ResultsWriter;
+use std::io;
 
 fn main() {
     pretty_env_logger::init();
@@ -270,7 +271,7 @@ fn main() {
                         .long("file")
                         .takes_value(true)
                         .help("Sets the filepath of the task file")
-                        .required(true),
+                        .required(false),
                 ),
         )
         .get_matches();
@@ -332,10 +333,13 @@ fn main() {
             tf_data_gen(length, variability, rsd, num, out).unwrap();
         }
         ("task", Some(m)) => {
-            let file = m.value_of("file").unwrap();
+            let file = m.value_of("file");
             match exec_task(file) {
                 Ok(()) => return,
-                Err(err) => eprintln!("An error has occurred: {}", err),
+                Err(err) => {
+                    eprintln!("An error has occurred: {}", err);
+                    ::std::process::exit(1);
+                },
             }
         }
         _ => eprintln!("Command needs to be specified. Use `--help` to view usage."),
@@ -719,9 +723,13 @@ fn test_traj_gen() {
     writer.flush().unwrap();
 }
 
-fn exec_task(file: &str) -> Result<(), failure::Error> {
+fn exec_task(file: Option<&str>) -> Result<(), failure::Error> {
     let mut contents = String::new();
-    File::open(file).unwrap().read_to_string(&mut contents)?;
+    if let Some(filename) = file {
+        File::open(filename).unwrap().read_to_string(&mut contents)?;
+    } else {
+        io::stdin().read_to_string(&mut contents)?;
+    }
     let task: tasks::ScenarioSpec = serde_yaml::from_str(&contents)?;
     debug!("Processing task definition: {:?}", task);
     task.execute()

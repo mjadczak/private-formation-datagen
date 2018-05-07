@@ -23,6 +23,7 @@ type TrajectorySets<S> = Vec<(Params, Vec<trajectory::NaiveTrajectory<S>>)>;
 pub struct ScenarioSpec {
     pub name: String,
     pub working_dir: String,
+    pub slug: Option<String>,
     pub robot: RobotSpec,
     pub observer: ObserverSpec,
     pub resolution: f64,
@@ -219,7 +220,12 @@ impl ScenarioExecutionContext {
 
     pub fn execute(&mut self, spec: &ScenarioSpec) -> Result<()> {
         self.working_dir = PathBuf::from(&spec.working_dir);
-        self.slug = Self::get_prefix() + &slugify(&spec.name, "", "_", None);
+        self.slug =
+            if let Some(ref slug) = spec.slug {
+                slug.clone()
+            } else {
+                Self::get_prefix() + &slugify(&spec.name, "", "_", None)
+            };
         self.info_file_path = self.working_dir.join(&self.slug);
         self.info_file_path.set_extension("dginfo.yaml");
         self.data_dir = self.working_dir.join(self.slug.clone() + "-data");
