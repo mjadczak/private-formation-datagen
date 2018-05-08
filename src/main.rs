@@ -726,7 +726,7 @@ fn test_traj_gen() {
 fn exec_task(file: Option<&str>) -> Result<(), failure::Error> {
     let mut contents = String::new();
     if let Some(filename) = file {
-        File::open(filename).unwrap().read_to_string(&mut contents)?;
+        File::open(filename)?.read_to_string(&mut contents)?;
     } else {
         io::stdin().read_to_string(&mut contents)?;
     }
