@@ -272,6 +272,12 @@ fn main() {
                         .takes_value(true)
                         .help("Sets the filepath of the task file")
                         .required(false),
+                )
+                .arg(
+                    Arg::with_name("print_file")
+                        .short("p")
+                        .long("print_file")
+                        .help("Prints the full path of the YAML dginfo file which was generated")
                 ),
         )
         .get_matches();
@@ -334,7 +340,8 @@ fn main() {
         }
         ("task", Some(m)) => {
             let file = m.value_of("file");
-            match exec_task(file) {
+            let print = m.is_present("print_file");
+            match exec_task(file, print) {
                 Ok(()) => return,
                 Err(err) => {
                     eprintln!("An error has occurred: {}", err);
@@ -723,7 +730,7 @@ fn test_traj_gen() {
     writer.flush().unwrap();
 }
 
-fn exec_task(file: Option<&str>) -> Result<(), failure::Error> {
+fn exec_task(file: Option<&str>, print_file: bool) -> Result<(), failure::Error> {
     let mut contents = String::new();
     if let Some(filename) = file {
         File::open(filename)?.read_to_string(&mut contents)?;
@@ -732,5 +739,10 @@ fn exec_task(file: Option<&str>) -> Result<(), failure::Error> {
     }
     let task: tasks::ScenarioSpec = serde_yaml::from_str(&contents)?;
     debug!("Processing task definition: {:?}", task);
-    task.execute()
+    let path = task.execute()?;
+    if print_file {
+        let path_str = path.to_str().ok_or(format_err!("weird characters in filepath"))?;
+        print!("{}", path_str);
+    }
+    Ok(())
 }

@@ -167,8 +167,7 @@ impl<W: Write, S: Vector> ResultsWriter<W, S> {
 
         // add the trajectory features per robot
         for (i, x) in data.into_iter().enumerate() {
-            let mut feature_lists: Vec<Vec<f32>> = Vec::with_capacity(features_per_robot);
-            feature_lists.resize(features_per_robot, Vec::new());
+            let mut feature_lists: Vec<Vec<f32>> = vec![Vec::new(); features_per_robot];
 
             for pos in x {
                 let repr = pos.repr();

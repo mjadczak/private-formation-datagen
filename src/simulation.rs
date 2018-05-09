@@ -26,6 +26,7 @@ pub trait SimulationResult<S: Vector> {
     fn time_step(&self) -> Seconds;
     fn num_robots(&self) -> usize;
     fn num_steps(&self) -> usize;
+    fn path_error(&self) -> Option<f64>;
 
     /// First dimension is robot number, second dimension is step
     fn into_data(self) -> Vec<Vec<S>>;
@@ -209,7 +210,7 @@ impl Controller<Metres2D> for UniformPIDController2D {
     }
 }
 
-pub struct SimpleSimulationResult<S: Vector>(Seconds, Vec<Vec<S>>);
+pub struct SimpleSimulationResult<S: Vector>(Seconds, Vec<Vec<S>>, Option<f64>);
 
 impl<S: Vector> SimulationResult<S> for SimpleSimulationResult<S> {
     fn time_step(&self) -> Seconds {
@@ -226,6 +227,10 @@ impl<S: Vector> SimulationResult<S> for SimpleSimulationResult<S> {
         } else {
             0
         }
+    }
+
+    fn path_error(&self) -> Option<f64> {
+        self.2
     }
 
     fn into_data(self) -> Vec<Vec<S>> {
@@ -386,17 +391,18 @@ pub struct SimpleSimulation<S: Vector, C: Controller<S>, Se: DistanceSensor<S>> 
     current_vel: Vec<S>,
     trajectory: NaiveTrajectory<S>,
     trajectory_origin: S,
+    targets: Vec<S>,
     follow_mode: LeaderTrajectoryMode,
     sensors: Vec<Se>,
 }
 
 impl<C, S, Se> SimpleSimulation<S, C, Se>
-where
-    S: Vector,
-    C: Controller<S>,
-    Se: DistanceSensor<S>,
+    where
+        S: Vector,
+        C: Controller<S>,
+        Se: DistanceSensor<S>,
 {
-    pub fn new<CI: IntoIterator<Item = C>, SI: IntoIterator<Item = Se>, F: Formation<S>>(
+    pub fn new<CI: IntoIterator<Item=C>, SI: IntoIterator<Item=Se>, F: Formation<S>>(
         num_robots: usize,
         leader_id: usize,
         sensors: SI,
@@ -421,8 +427,9 @@ where
 
         // Set targets for controllers
         let leader_pos = current_pos[leader_id];
-        for (i, c) in controllers.iter_mut().enumerate() {
-            c.set_target(leader_pos - current_pos[i]);
+        let targets: Vec<S> = current_pos.iter().map(|&pos| leader_pos - pos).collect();
+        for (c, target) in controllers.iter_mut().zip(targets.iter()) {
+            c.set_target(*target);
         }
 
         SimpleSimulation {
@@ -434,6 +441,7 @@ where
             current_vel: vec![S::zero(); num_robots],
             trajectory: trajectory.clone(),
             trajectory_origin: leader_pos,
+            targets,
             follow_mode,
             sensors,
         }
@@ -441,10 +449,10 @@ where
 }
 
 impl<C, S, Se> Simulation<S> for SimpleSimulation<S, C, Se>
-where
-    S: Vector,
-    C: Controller<S>,
-    Se: DistanceSensor<S>,
+    where
+        S: Vector,
+        C: Controller<S>,
+        Se: DistanceSensor<S>,
 {
     type Result = SimpleSimulationResult<S>;
 
@@ -460,6 +468,7 @@ where
         // +1 since `num_steps` is really the number of data points, and the number of steps is one less than that.
         let num_steps: usize = ((total_time / time_step).ceil() as usize) + 1;
         assert!(self.trajectory.data().len() >= num_steps);
+        let mut total_error_sqd = 0.;
 
         // Allocate space
         for res_vec in self.results.iter_mut() {
@@ -467,46 +476,64 @@ where
         }
 
         for step in 0..num_steps {
-            let reference_pos = self.trajectory.data()[step] + self.trajectory_origin;
+            let leader_reference_pos = self.trajectory.data()[step] + self.trajectory_origin;
 
             // Handle case where the leader exactly takes the reference trajectory
             if self.follow_mode == LeaderTrajectoryMode::Predefined {
-                self.current_pos[self.leader_id] = reference_pos;
+                self.current_pos[self.leader_id] = leader_reference_pos;
             }
 
             // First, update the current position of each robot based on the velocity since last time step
             // Also, record the current position at this step into the results
             // Vel is kept at 0 in the case of DefinedTrajectory, so this is fine
+            // Also add to total path error (don't distinguish different robots)
             for ((mut pos, vel), mut result) in self.current_pos
                 .iter_mut()
                 .zip(self.current_vel.iter())
                 .zip(self.results.iter_mut())
-            {
-                *pos += *vel * time_step;
-                result.push(observer.observe(*pos));
-            }
+                {
+                    *pos += *vel * time_step;
+                    result.push(observer.observe(*pos));
+                }
 
             // Now run the controllers for each robot, obtaining the new velocity for the next time slice
             let leader_pos = self.current_pos[self.leader_id];
-            for (id, (mut controller, mut velocity)) in self.controllers
+            for (id, ((mut controller, mut velocity), setpoint_target)) in self.controllers
                 .iter_mut()
                 .zip(self.current_vel.iter_mut())
+                .zip(self.targets.iter())
                 .enumerate()
-            {
-                let target_pos = if id == self.leader_id {
-                    match self.follow_mode {
-                        LeaderTrajectoryMode::Predefined => continue,
-                        LeaderTrajectoryMode::Follow => reference_pos,
-                    }
-                } else {
-                    leader_pos
-                };
-                let target_distance = target_pos - self.current_pos[id];
-                let sensed_distance = self.sensors[id].sense(target_distance);
-                *velocity = controller.take_step(sensed_distance, time_step);
-            }
+                {
+                    let target_pos = if id == self.leader_id {
+                        match self.follow_mode {
+                            LeaderTrajectoryMode::Predefined => continue,
+                            LeaderTrajectoryMode::Follow => leader_reference_pos,
+                        }
+                    } else {
+                        leader_pos
+                    };
+                    let target_offset = target_pos - self.current_pos[id];
+                    let sensed_distance = self.sensors[id].sense(target_offset);
+                    *velocity = controller.take_step(sensed_distance, time_step);
+
+                    // calc position error based on true distance from _trajectory_, not leader
+                    // offset from ideal leader
+                    let reference_leader_offset = leader_reference_pos - self.current_pos[id];
+                    // offset we want from ideal leader is setpoint_target
+                    let error = (reference_leader_offset - *setpoint_target).length();
+                    total_error_sqd += error.powi(2);
+                }
         }
 
-        SimpleSimulationResult(time_step, self.results)
+        let path_error = {
+            // in predefined trajectory mode, the lead robot has no error, so don't count it in the average
+            let num_active_robots = match self.follow_mode {
+                LeaderTrajectoryMode::Predefined => self.num_robots - 1,
+                LeaderTrajectoryMode::Follow => self.num_robots
+            } as f64;
+            total_error_sqd / num_active_robots
+        };
+
+        SimpleSimulationResult(time_step, self.results, Some(path_error))
     }
 }

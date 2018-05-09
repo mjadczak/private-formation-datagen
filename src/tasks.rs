@@ -14,6 +14,7 @@ use time;
 use trajectory;
 use serde_yaml;
 use std::io::Write;
+use simulation::SimulationResult;
 
 type Result<R> = ::std::result::Result<R, Error>;
 type Params = HashMap<String, ConstantParam>;
@@ -56,7 +57,7 @@ pub struct RobotSpec {
     pub num_robots: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ControllerSpec {
     PID {
@@ -64,6 +65,16 @@ pub enum ControllerSpec {
         i_gain: f64,
         d_gain: f64,
     },
+}
+
+impl Default for ControllerSpec {
+    fn default() -> Self {
+        ControllerSpec::PID {
+            p_gain: 0.,
+            i_gain: 0.,
+            d_gain: 0.,
+        }
+    }
 }
 
 impl ControllerSpec {
@@ -193,6 +204,7 @@ pub struct DatasetDescription {
     pub points_per_trajectory: usize,
     pub resolution: f64,
     pub features: Params,
+    pub controller: ControllerSpec,
     pub files: Vec<DataFileDescription>,
 }
 
@@ -218,6 +230,10 @@ impl ScenarioExecutionContext {
         Default::default()
     }
 
+    pub fn into_info_file_path(self) -> PathBuf {
+        self.info_file_path
+    }
+
     pub fn execute(&mut self, spec: &ScenarioSpec) -> Result<()> {
         self.working_dir = PathBuf::from(&spec.working_dir);
         self.slug =
@@ -238,6 +254,7 @@ impl ScenarioExecutionContext {
         self.description.dimensions = spec.dimensions;
         self.description.points_per_trajectory = (spec.length / spec.resolution) as usize + 1;
         self.description.resolution = spec.resolution;
+        self.description.controller = spec.robot.controller.clone();
 
         ensure!(
             spec.robot.num_robots == 2,
@@ -317,7 +334,7 @@ impl ScenarioExecutionContext {
         S: Vector,
         C: simulation::Controller<S>,
         F: simulation::Formation<S>,
-        G: FormationGenerator<S, Result = F>,
+        G: FormationGenerator<S, Result=F>,
         Se: simulation::DistanceSensor<S>,
         O: simulation::Observer<S>
     >(
@@ -329,11 +346,13 @@ impl ScenarioExecutionContext {
         sensor: Se,
         mut observer: O,
     ) -> Result<()> {
-        let set_num_width = spec.reference_trajectories.num_sets.to_string().len();
+        let num_sets = trajectory_sets.len();
+        let set_num_width = num_sets.to_string().len();
         let mut rng = SmallRng::from_entropy();
         let num_robots = spec.robot.num_robots;
         let sensors = vec![sensor; num_robots];
         let controllers = vec![controller; num_robots];
+        let mut total_path_error = 0.;
 
         for (set_num, (params, trajectories)) in trajectory_sets.into_iter().enumerate() {
             debug!("Processing trajectory set number {}", set_num);
@@ -356,13 +375,6 @@ impl ScenarioExecutionContext {
                 let (formation_params, formation) =
                     formation_generator.generate(&mut rng, spec.robot.num_robots);
                 for leader in 0..spec.robot.num_robots {
-                    let mut trajectory_params = formation_params.clone();
-                    trajectory_params
-                        .insert("leader".to_string(), ConstantParam::Int(leader as i64));
-                    file_description
-                        .per_trajectory_features
-                        .push(trajectory_params);
-
                     let result =
                         simulation::SimpleSimulation::new(
                             spec.robot.num_robots,
@@ -374,6 +386,19 @@ impl ScenarioExecutionContext {
                             simulation::LeaderTrajectoryMode::Follow,
                         ).run(spec.length, spec.resolution, &mut observer);
 
+                    let mut trajectory_params = formation_params.clone();
+                    trajectory_params
+                        .insert("leader".to_string(), ConstantParam::Int(leader as i64));
+                    if let Some(error) = result.path_error() {
+                        trajectory_params.insert("path_error".to_string(), ConstantParam::Float(error));
+                        total_path_error += error;
+                        trace!("Path error={}", error);
+                    }
+
+                    file_description
+                        .per_trajectory_features
+                        .push(trajectory_params);
+
                     writer.write_record(result, leader)?;
                 }
             }
@@ -381,8 +406,13 @@ impl ScenarioExecutionContext {
             self.description.files.push(file_description);
             writer.finish()?;
         }
+        if total_path_error > 0. {
+            let total_trajectories = (num_sets * spec.reference_trajectories.num_per_set * spec.robot.num_robots) as f64;
+            let avg_path_error = total_path_error / total_trajectories;
+            self.description.features.insert("avg_path_error".to_string(), ConstantParam::Float(avg_path_error));
+        }
         let mut info_file = File::create(&self.info_file_path)?;
-        write!(&mut info_file, "# datagen-info v2.0\n")?;
+        write!(&mut info_file, "# datagen-info v2.1\n")?;
         serde_yaml::to_writer(&mut info_file, &self.description)?;
 
         info!("Finished writing file {:?}", self.info_file_path);
@@ -395,9 +425,10 @@ impl ScenarioExecutionContext {
 }
 
 impl ScenarioSpec {
-    pub fn execute(&self) -> Result<()> {
+    pub fn execute(&self) -> Result<PathBuf> {
         let mut executor = ScenarioExecutionContext::new();
-        executor.execute(self)
+        executor.execute(self)?;
+        Ok(executor.into_info_file_path())
     }
 }
 
@@ -499,28 +530,28 @@ impl GenericFloatParam {
             ParamsSpec::Constant { ref values } => match *values
                 .get(key)
                 .ok_or(format_err!("required parameter not found"))?
-            {
-                ConstantParam::Float(val) => Ok(GenericFloatParam::Constant(val)),
-                ConstantParam::Int(val) => Ok(GenericFloatParam::Constant(val as f64))
-            },
+                {
+                    ConstantParam::Float(val) => Ok(GenericFloatParam::Constant(val)),
+                    ConstantParam::Int(val) => Ok(GenericFloatParam::Constant(val as f64))
+                },
             ParamsSpec::Random { ref values } => {
                 match *values
                     .get(key)
                     .ok_or(format_err!("required parameter not found"))?
-                {
-                    RandomParamSpec::Constant { value } => Ok(GenericFloatParam::Constant(value)),
-                    RandomParamSpec::Uniform { range } => {
-                        let (lower, upper) = range;
-                        let dist = Uniform::new_inclusive(lower, upper);
-                        Ok(GenericFloatParam::Uniform(dist))
+                    {
+                        RandomParamSpec::Constant { value } => Ok(GenericFloatParam::Constant(value)),
+                        RandomParamSpec::Uniform { range } => {
+                            let (lower, upper) = range;
+                            let dist = Uniform::new_inclusive(lower, upper);
+                            Ok(GenericFloatParam::Uniform(dist))
+                        }
+                        RandomParamSpec::Normal { range } => {
+                            let (lower, upper) = range;
+                            let mean = (lower + upper) / 2.;
+                            let sd = (mean - lower) / 2.58; // 99% of values in range
+                            Ok(GenericFloatParam::Normal(Normal::new(mean, sd)))
+                        }
                     }
-                    RandomParamSpec::Normal { range } => {
-                        let (lower, upper) = range;
-                        let mean = (lower + upper) / 2.;
-                        let sd = (mean - lower) / 2.58; // 99% of values in range
-                        Ok(GenericFloatParam::Normal(Normal::new(mean, sd)))
-                    }
-                }
             }
         }
     }
