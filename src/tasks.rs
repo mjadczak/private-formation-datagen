@@ -15,6 +15,7 @@ use trajectory;
 use serde_yaml;
 use std::io::Write;
 use simulation::SimulationResult;
+use num::Zero;
 
 type Result<R> = ::std::result::Result<R, Error>;
 type Params = HashMap<String, ConstantParam>;
@@ -324,7 +325,9 @@ impl ScenarioExecutionContext {
 
                 let observer = spec.observer.get_observer();
 
-                self.stage2(spec, trajectory_sets, controller, Dummy2DFormationGenerator, sensor, observer)
+                let generator = Simple2DFormationGenerator::new(&spec.formations.params)?;
+
+                self.stage2(spec, trajectory_sets, controller, generator, sensor, observer)
             }
             _ => bail!("Only 1D and 2D operation supported"),
         }
@@ -596,12 +599,37 @@ impl FormationGenerator<Metres> for Simple1DFormationGenerator {
     }
 }
 
-struct Dummy2DFormationGenerator;
+struct Simple2DFormationGenerator {
+    distance_x: GenericFloatParam,
+    distance_y: GenericFloatParam,
+}
 
-impl FormationGenerator<Metres2D> for Dummy2DFormationGenerator {
+impl Simple2DFormationGenerator {
+    fn new(params: &ParamsSpec) -> Result<Self> {
+        Ok(Simple2DFormationGenerator {
+            distance_x: GenericFloatParam::from_param(params, "distance_x")?,
+            distance_y: GenericFloatParam::from_param(params, "distance_y")?,
+        })
+    }
+
+    fn get_params(distance_x: f64, distance_y: f64) -> Params {
+        let mut params = HashMap::with_capacity(2);
+        params.insert("distance_x".to_string(), ConstantParam::Float(distance_x));
+        params.insert("distance_y".to_string(), ConstantParam::Float(distance_y));
+        params
+    }
+}
+
+impl FormationGenerator<Metres2D> for Simple2DFormationGenerator {
     type Result = simulation::SimpleFormation<Metres2D>;
 
     fn generate<R: Rng + ?Sized>(&self, rng: &mut R, num_robots: usize) -> (Params, Self::Result) {
-        panic!("2d formations not yet implemented")
+        assert_eq!(num_robots, 2);
+        let distance_x = self.distance_x.sample(rng);
+        let distance_y = self.distance_y.sample(rng);
+        (
+            Self::get_params(distance_x, distance_y),
+            simulation::SimpleFormation::new(2, Metres2D::zero(), vec![Metres2D { x: distance_x, y: distance_y }, Metres2D::zero()]),
+        )
     }
 }

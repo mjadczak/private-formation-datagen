@@ -346,7 +346,7 @@ fn main() {
                 Err(err) => {
                     eprintln!("An error has occurred: {}", err);
                     ::std::process::exit(1);
-                },
+                }
             }
         }
         _ => eprintln!("Command needs to be specified. Use `--help` to view usage."),
@@ -505,15 +505,9 @@ fn data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
         let converted_trajectory = trajectory::NaiveTrajectory::from_points(resolution, trajectory);
 
         // simulate
-        let cparams = simulation::PControllerParams::default();
-        let controllers = vec![
-            simulation::PController::new(cparams),
-            simulation::PController::new(cparams),
-        ];
-        let sensors = vec![
-            simulation::SharpIrSensor::new(),
-            simulation::SharpIrSensor::new(),
-        ];
+        let cparams = simulation::PIDControllerParams { d_gain: -2.7717956208417274, i_gain: -49.87846192197631, p_gain: -98.10637431966632, vel_limits: (-0.5, 0.5) };
+        let controllers = vec![simulation::PIDController::new(cparams); 2];
+        let sensors = vec![simulation::SharpIrSensor::new(); 2];
         let formation = simulation::SimpleFormation::new(2, 0., vec![0.2, 0.]);
         let simulation0 = simulation::SimpleSimulation::new(
             2,
@@ -533,8 +527,8 @@ fn data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
             &converted_trajectory,
             trajectory_mode,
         );
-        let mut observer = simulation::SimpleObserver::new(0.05);
-        //let mut observer = simulation::PerfectObserver {};
+//        let mut observer = simulation::SimpleObserver::new(0.1);
+        let mut observer = simulation::PerfectObserver {};
         let result0 = simulation0
             .run(length, resolution, &mut observer)
             .into_data();
@@ -593,8 +587,9 @@ fn data_gen_2d(length: f64, variability: f64, rsd: f64, turnability: f64, num: u
 
         // simulate
         let cparams = simulation::PIDControllerParams {
-            i_gain: 0.,
-            d_gain: 0.,
+            i_gain: -28.482764826067914,
+            d_gain: 2.5848698420339744,
+            p_gain: -123.57725960258975,
             ..Default::default()
         };
         let controllers = vec![simulation::UniformPIDController2D::new(cparams); 2];
@@ -742,7 +737,7 @@ fn exec_task(file: Option<&str>, print_file: bool) -> Result<(), failure::Error>
     let path = task.execute()?;
     if print_file {
         let path_str = path.to_str().ok_or(format_err!("weird characters in filepath"))?;
-        print!("{}", path_str);
+        println!("{}", path_str);
     }
     Ok(())
 }
