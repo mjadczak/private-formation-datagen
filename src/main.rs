@@ -12,6 +12,8 @@ extern crate time;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
+extern crate failure_derive;
+#[macro_use]
 extern crate failure;
 #[macro_use]
 extern crate log;
@@ -20,7 +22,9 @@ extern crate pretty_env_logger;
 extern crate slugify;
 
 pub mod base;
+pub mod dubins;
 pub mod simulation;
+pub mod simulation_2d;
 pub mod tasks;
 pub mod tf_record;
 pub mod trajectory;

@@ -42,7 +42,7 @@ impl Vector for f64 {
     }
 }
 
-#[derive(PartialEq, PartialOrd, Copy, Clone, Debug)]
+#[derive(PartialEq, PartialOrd, Copy, Clone, Debug, Default)]
 pub struct Metres2D {
     pub x: f64,
     pub y: f64,
@@ -161,6 +161,26 @@ impl Metres2D {
         PolarMetres2D {
             theta: self.y.atan2(self.x),
             r: self.length(),
+        }
+    }
+
+    pub fn new(x: f64, y: f64) -> Metres2D {
+        Metres2D {x, y}
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+pub struct OrientedPosition2D {
+    pub position: Metres2D,
+    /// Anticlockwise rotation
+    pub rotation: Radians,
+}
+
+impl OrientedPosition2D {
+    pub fn new(x: f64, y: f64, theta: f64) -> OrientedPosition2D {
+        OrientedPosition2D {
+            position: Metres2D::new(x, y),
+            rotation: theta
         }
     }
 }
