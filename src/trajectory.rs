@@ -114,6 +114,66 @@ impl<S: Vector> Index<usize> for NaiveTrajectory<S> {
     }
 }
 
+pub struct Heading2DTrajectory (Seconds, Vec<(Metres2D, Radians)>);
+
+impl Heading2DTrajectory {
+    pub fn time_step(&self) -> Seconds {
+        self.0
+    }
+    pub fn data(&self) -> &Vec<(Metres2D, Radians)> {
+        &self.1
+    }
+
+    /// Creates a piecewise linear uniform Heading2DTrajectory from a set of control points.
+    /// The points should be at integer multiples of the resolution, and must be ordered in increasing order.
+    /// The first point should have time = 0
+    pub fn from_points<I>(resolution: Seconds, points: I) -> Heading2DTrajectory
+        where
+            I: IntoIterator<Item = (Seconds, Metres2D, Radians)>,
+    {
+        let mut data: Vec<(Metres2D, Radians)> = Vec::new();
+        let mut pk = points.into_iter().peekable();
+        if let None = pk.peek() {
+            panic!("must pass in some points");
+        }
+
+        // Don't use a float as an iterator so that we don't accumulate errors
+        let mut cur_index: u64 = 0;
+
+        loop {
+            let (left_time, left_pos, _) = pk.next().unwrap();
+            let (right_time, right_pos, segment_heading) = match pk.peek() {
+                None => break,
+                Some(&(t, p, s)) => (t, p, s),
+            };
+
+            let time_span = right_time - left_time;
+
+            loop {
+                let cur_time = cur_index as f64 * resolution;
+                if cur_time > right_time {
+                    break;
+                }
+
+                let a = (cur_time - left_time) / time_span;
+                let pos = left_pos * (1. - a) + right_pos * a;
+                data.push((pos, segment_heading));
+
+                cur_index += 1;
+            }
+        }
+
+        Heading2DTrajectory(resolution, data)
+    }
+}
+
+impl Index<usize> for Heading2DTrajectory {
+    type Output = (Metres2D, Radians);
+    fn index(&self, index: usize) -> &(Metres2D, Radians) {
+        &self.1[index]
+    }
+}
+
 /// A simple, non-configurable trajectory generation algorithm.
 /// `variability` controls how many segments the trajectory has – the segments generated have a mean length of `min_length / variability`.
 /// `rsd` controls how much the segment length varies.
@@ -191,6 +251,49 @@ pub fn generate_2d_trajectory_points_simple(
         }.to_cartesian();
         cur_pos += velocity * seg_length;
         points.push((cur_time, cur_pos));
+    }
+
+    points
+}
+
+/// Each point also has the heading of the _previous_ segment in radians
+pub fn generate_2d_trajectory_points_with_heading(
+    max_speed: MetresPerSecond,
+    min_length: Seconds,
+    variability: f64,
+    rsd: f64,
+    turnability: f64,
+) -> Vec<(Seconds, Metres2D, Radians)> {
+    let mut rng = SmallRng::from_rng(thread_rng()).unwrap();
+    let segment_length_dist = {
+        let mean = min_length / variability;
+        let sd = mean * rsd;
+        Normal::new(mean, sd)
+    };
+    let heading_dist = Normal::new(0., turnability);
+    let speed_generator = SpeedGenerator::new(max_speed, 0.2, 0.7, 0.85);
+    let mut cur_time = 0.;
+    let mut cur_pos = Metres2D::zero();
+    let mut cur_heading = {
+        let sample: f64 = rng.sample(Standard);
+        (sample * 2. * PI) - PI
+    };
+    let mut points = vec![(cur_time, cur_pos, 0.)];
+
+    while cur_time < min_length {
+        let seg_length = segment_length_dist.sample(&mut rng);
+        if seg_length <= 0. {
+            continue;
+        }
+        cur_time += seg_length;
+        let speed = speed_generator.gen_speed(&mut rng);
+        cur_heading += heading_dist.sample(&mut rng);
+        let velocity = PolarMetres2D {
+            r: speed,
+            theta: cur_heading,
+        }.to_cartesian();
+        cur_pos += velocity * seg_length;
+        points.push((cur_time, cur_pos, cur_heading));
     }
 
     points

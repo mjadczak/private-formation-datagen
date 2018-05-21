@@ -26,6 +26,7 @@ pub trait Vector:
 pub type Seconds = f64;
 pub type Metres = f64;
 pub type MetresPerSecond = f64;
+pub type Radians = f64;
 
 impl Vector for f64 {
     fn length(&self) -> f64 {
