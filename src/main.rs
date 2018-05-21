@@ -34,10 +34,10 @@ use clap::{App, Arg, SubCommand};
 use num::Zero;
 use simulation::{Simulation, SimulationResult};
 use std::fs::File;
+use std::io;
 use std::io::Read;
 use std::path::Path;
 use tf_record::ResultsWriter;
-use std::io;
 
 fn main() {
     pretty_env_logger::init();
@@ -281,7 +281,7 @@ fn main() {
                     Arg::with_name("print_file")
                         .short("p")
                         .long("print_file")
-                        .help("Prints the full path of the YAML dginfo file which was generated")
+                        .help("Prints the full path of the YAML dginfo file which was generated"),
                 ),
         )
         .get_matches();
@@ -289,9 +289,11 @@ fn main() {
     match matches.subcommand() {
         ("test", _) => test_traj_gen(),
         ("gen-traj", Some(m)) => {
-            let length = m.value_of("length")
+            let length = m
+                .value_of("length")
                 .map_or(10., |s| s.parse::<f64>().unwrap());
-            let variability = m.value_of("variability")
+            let variability = m
+                .value_of("variability")
                 .map_or(2., |s| s.parse::<f64>().unwrap());
             let rsd = m.value_of("rsd").map_or(0.1, |s| s.parse::<f64>().unwrap());
             let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
@@ -299,21 +301,26 @@ fn main() {
             traj_gen(length, variability, rsd, num, out);
         }
         ("gen-traj-2d", Some(m)) => {
-            let length = m.value_of("length")
+            let length = m
+                .value_of("length")
                 .map_or(10., |s| s.parse::<f64>().unwrap());
-            let variability = m.value_of("variability")
+            let variability = m
+                .value_of("variability")
                 .map_or(2., |s| s.parse::<f64>().unwrap());
             let rsd = m.value_of("rsd").map_or(0.1, |s| s.parse::<f64>().unwrap());
             let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
             let out = m.value_of("output_dir").unwrap();
-            let turnability = m.value_of("turnability")
+            let turnability = m
+                .value_of("turnability")
                 .map_or(1., |s| s.parse::<f64>().unwrap());
             traj_gen_2d(length, variability, rsd, turnability, num, out);
         }
         ("gen-data", Some(m)) => {
-            let length = m.value_of("length")
+            let length = m
+                .value_of("length")
                 .map_or(10., |s| s.parse::<f64>().unwrap());
-            let variability = m.value_of("variability")
+            let variability = m
+                .value_of("variability")
                 .map_or(2., |s| s.parse::<f64>().unwrap());
             let rsd = m.value_of("rsd").map_or(0.1, |s| s.parse::<f64>().unwrap());
             let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
@@ -321,21 +328,26 @@ fn main() {
             data_gen(length, variability, rsd, num, out);
         }
         ("gen-data-2d", Some(m)) => {
-            let length = m.value_of("length")
+            let length = m
+                .value_of("length")
                 .map_or(10., |s| s.parse::<f64>().unwrap());
-            let variability = m.value_of("variability")
+            let variability = m
+                .value_of("variability")
                 .map_or(2., |s| s.parse::<f64>().unwrap());
             let rsd = m.value_of("rsd").map_or(0.1, |s| s.parse::<f64>().unwrap());
             let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
             let out = m.value_of("output_dir").unwrap();
-            let turnability = m.value_of("turnability")
+            let turnability = m
+                .value_of("turnability")
                 .map_or(1., |s| s.parse::<f64>().unwrap());
             data_gen_2d(length, variability, rsd, turnability, num, out);
         }
         ("gen-tf-data", Some(m)) => {
-            let length = m.value_of("length")
+            let length = m
+                .value_of("length")
                 .map_or(10., |s| s.parse::<f64>().unwrap());
-            let variability = m.value_of("variability")
+            let variability = m
+                .value_of("variability")
                 .map_or(2., |s| s.parse::<f64>().unwrap());
             let rsd = m.value_of("rsd").map_or(0.1, |s| s.parse::<f64>().unwrap());
             let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
@@ -509,7 +521,12 @@ fn data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
         let converted_trajectory = trajectory::NaiveTrajectory::from_points(resolution, trajectory);
 
         // simulate
-        let cparams = simulation::PIDControllerParams { d_gain: -2.7717956208417274, i_gain: -49.87846192197631, p_gain: -98.10637431966632, vel_limits: (-0.5, 0.5) };
+        let cparams = simulation::PIDControllerParams {
+            d_gain: -2.7717956208417274,
+            i_gain: -49.87846192197631,
+            p_gain: -98.10637431966632,
+            vel_limits: (-0.5, 0.5),
+        };
         let controllers = vec![simulation::PIDController::new(cparams); 2];
         let sensors = vec![simulation::SharpIrSensor::new(); 2];
         let formation = simulation::SimpleFormation::new(2, 0., vec![0.2, 0.]);
@@ -531,7 +548,7 @@ fn data_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
             &converted_trajectory,
             trajectory_mode,
         );
-//        let mut observer = simulation::SimpleObserver::new(0.1);
+        //        let mut observer = simulation::SimpleObserver::new(0.1);
         let mut observer = simulation::PerfectObserver {};
         let result0 = simulation0
             .run(length, resolution, &mut observer)
@@ -740,7 +757,9 @@ fn exec_task(file: Option<&str>, print_file: bool) -> Result<(), failure::Error>
     debug!("Processing task definition: {:?}", task);
     let path = task.execute()?;
     if print_file {
-        let path_str = path.to_str().ok_or(format_err!("weird characters in filepath"))?;
+        let path_str = path
+            .to_str()
+            .ok_or(format_err!("weird characters in filepath"))?;
         println!("{}", path_str);
     }
     Ok(())

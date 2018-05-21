@@ -165,7 +165,7 @@ impl Metres2D {
     }
 
     pub fn new(x: f64, y: f64) -> Metres2D {
-        Metres2D {x, y}
+        Metres2D { x, y }
     }
 }
 
@@ -180,7 +180,7 @@ impl OrientedPosition2D {
     pub fn new(x: f64, y: f64, theta: f64) -> OrientedPosition2D {
         OrientedPosition2D {
             position: Metres2D::new(x, y),
-            rotation: theta
+            rotation: theta,
         }
     }
 }

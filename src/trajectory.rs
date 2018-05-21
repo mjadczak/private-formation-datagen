@@ -114,7 +114,7 @@ impl<S: Vector> Index<usize> for NaiveTrajectory<S> {
     }
 }
 
-pub struct Heading2DTrajectory (Seconds, Vec<(Metres2D, Radians)>);
+pub struct Heading2DTrajectory(Seconds, Vec<(Metres2D, Radians)>);
 
 impl Heading2DTrajectory {
     pub fn time_step(&self) -> Seconds {
@@ -128,8 +128,8 @@ impl Heading2DTrajectory {
     /// The points should be at integer multiples of the resolution, and must be ordered in increasing order.
     /// The first point should have time = 0
     pub fn from_points<I>(resolution: Seconds, points: I) -> Heading2DTrajectory
-        where
-            I: IntoIterator<Item = (Seconds, Metres2D, Radians)>,
+    where
+        I: IntoIterator<Item = (Seconds, Metres2D, Radians)>,
     {
         let mut data: Vec<(Metres2D, Radians)> = Vec::new();
         let mut pk = points.into_iter().peekable();

@@ -1,21 +1,21 @@
 use base::*;
 use failure::Error;
+use num::Zero;
 use rand::distributions::{Distribution, Normal, Range, StandardNormal, Uniform};
 use rand::{FromEntropy, Rng, SmallRng};
+use serde_yaml;
 use simulation;
 use simulation::Simulation;
+use simulation::SimulationResult;
 use slugify::slugify;
 use std;
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 use tf_record;
 use time;
 use trajectory;
-use serde_yaml;
-use std::io::Write;
-use simulation::SimulationResult;
-use num::Zero;
 
 type Result<R> = ::std::result::Result<R, Error>;
 type Params = HashMap<String, ConstantParam>;
@@ -157,7 +157,14 @@ impl ParamsSpec {
                 let sample: f64 = rng.sample(StandardNormal);
                 let val1 = (sample * sd) + mean;
                 let val = val1.max(lower).min(upper);
-                trace!("Specialising param with range {:?}: mean={}, sd={}, val={}, result={}", range, mean, sd, val1, val);
+                trace!(
+                    "Specialising param with range {:?}: mean={}, sd={}, val={}, result={}",
+                    range,
+                    mean,
+                    sd,
+                    val1,
+                    val
+                );
                 (key, ConstantParam::Float(val))
             }
             RandomParamSpec::Constant { value } => (key, ConstantParam::Float(value)),
@@ -237,17 +244,19 @@ impl ScenarioExecutionContext {
 
     pub fn execute(&mut self, spec: &ScenarioSpec) -> Result<()> {
         self.working_dir = PathBuf::from(&spec.working_dir);
-        self.slug =
-            if let Some(ref slug) = spec.slug {
-                slug.clone()
-            } else {
-                Self::get_prefix() + &slugify(&spec.name, "", "_", None)
-            };
+        self.slug = if let Some(ref slug) = spec.slug {
+            slug.clone()
+        } else {
+            Self::get_prefix() + &slugify(&spec.name, "", "_", None)
+        };
         self.info_file_path = self.working_dir.join(&self.slug);
         self.info_file_path.set_extension("dginfo.yaml");
         self.data_dir = self.working_dir.join(self.slug.clone() + "-data");
 
-        debug!("Working dir is {:?}, data dir is {:?}", self.working_dir, self.data_dir);
+        debug!(
+            "Working dir is {:?}, data dir is {:?}",
+            self.working_dir, self.data_dir
+        );
 
         std::fs::create_dir_all(&self.data_dir)?;
 
@@ -286,7 +295,8 @@ impl ScenarioExecutionContext {
                     trajectory_sets.push((params, set));
                 }
 
-                let controller = spec.robot
+                let controller = spec
+                    .robot
                     .controller
                     .get_1d_controller(spec.robot.max_speed);
 
@@ -296,7 +306,14 @@ impl ScenarioExecutionContext {
 
                 let observer = spec.observer.get_observer();
 
-                self.stage2(spec, trajectory_sets, controller, generator, sensor, observer)
+                self.stage2(
+                    spec,
+                    trajectory_sets,
+                    controller,
+                    generator,
+                    sensor,
+                    observer,
+                )
             }
             2 => {
                 let mut trajectory_sets: TrajectorySets<Metres2D> = Vec::with_capacity(num_sets);
@@ -315,7 +332,8 @@ impl ScenarioExecutionContext {
                     trajectory_sets.push((params, set));
                 }
 
-                let controller = spec.robot
+                let controller = spec
+                    .robot
                     .controller
                     .get_2d_controller(spec.robot.max_speed);
 
@@ -327,7 +345,14 @@ impl ScenarioExecutionContext {
 
                 let generator = Simple2DFormationGenerator::new(&spec.formations.params)?;
 
-                self.stage2(spec, trajectory_sets, controller, generator, sensor, observer)
+                self.stage2(
+                    spec,
+                    trajectory_sets,
+                    controller,
+                    generator,
+                    sensor,
+                    observer,
+                )
             }
             _ => bail!("Only 1D and 2D operation supported"),
         }
@@ -337,9 +362,9 @@ impl ScenarioExecutionContext {
         S: Vector,
         C: simulation::Controller<S>,
         F: simulation::Formation<S>,
-        G: FormationGenerator<S, Result=F>,
+        G: FormationGenerator<S, Result = F>,
         Se: simulation::DistanceSensor<S>,
-        O: simulation::Observer<S>
+        O: simulation::Observer<S>,
     >(
         &mut self,
         spec: &ScenarioSpec,
@@ -393,7 +418,8 @@ impl ScenarioExecutionContext {
                     trajectory_params
                         .insert("leader".to_string(), ConstantParam::Int(leader as i64));
                     if let Some(error) = result.path_error() {
-                        trajectory_params.insert("path_error".to_string(), ConstantParam::Float(error));
+                        trajectory_params
+                            .insert("path_error".to_string(), ConstantParam::Float(error));
                         total_path_error += error;
                         trace!("Path error={}", error);
                     }
@@ -410,9 +436,13 @@ impl ScenarioExecutionContext {
             writer.finish()?;
         }
         if total_path_error > 0. {
-            let total_trajectories = (num_sets * spec.reference_trajectories.num_per_set * spec.robot.num_robots) as f64;
+            let total_trajectories =
+                (num_sets * spec.reference_trajectories.num_per_set * spec.robot.num_robots) as f64;
             let avg_path_error = total_path_error / total_trajectories;
-            self.description.features.insert("avg_path_error".to_string(), ConstantParam::Float(avg_path_error));
+            self.description.features.insert(
+                "avg_path_error".to_string(),
+                ConstantParam::Float(avg_path_error),
+            );
         }
         let mut info_file = File::create(&self.info_file_path)?;
         write!(&mut info_file, "# datagen-info v2.1\n")?;
@@ -533,28 +563,28 @@ impl GenericFloatParam {
             ParamsSpec::Constant { ref values } => match *values
                 .get(key)
                 .ok_or(format_err!("required parameter not found"))?
-                {
-                    ConstantParam::Float(val) => Ok(GenericFloatParam::Constant(val)),
-                    ConstantParam::Int(val) => Ok(GenericFloatParam::Constant(val as f64))
-                },
+            {
+                ConstantParam::Float(val) => Ok(GenericFloatParam::Constant(val)),
+                ConstantParam::Int(val) => Ok(GenericFloatParam::Constant(val as f64)),
+            },
             ParamsSpec::Random { ref values } => {
                 match *values
                     .get(key)
                     .ok_or(format_err!("required parameter not found"))?
-                    {
-                        RandomParamSpec::Constant { value } => Ok(GenericFloatParam::Constant(value)),
-                        RandomParamSpec::Uniform { range } => {
-                            let (lower, upper) = range;
-                            let dist = Uniform::new_inclusive(lower, upper);
-                            Ok(GenericFloatParam::Uniform(dist))
-                        }
-                        RandomParamSpec::Normal { range } => {
-                            let (lower, upper) = range;
-                            let mean = (lower + upper) / 2.;
-                            let sd = (mean - lower) / 2.58; // 99% of values in range
-                            Ok(GenericFloatParam::Normal(Normal::new(mean, sd)))
-                        }
+                {
+                    RandomParamSpec::Constant { value } => Ok(GenericFloatParam::Constant(value)),
+                    RandomParamSpec::Uniform { range } => {
+                        let (lower, upper) = range;
+                        let dist = Uniform::new_inclusive(lower, upper);
+                        Ok(GenericFloatParam::Uniform(dist))
                     }
+                    RandomParamSpec::Normal { range } => {
+                        let (lower, upper) = range;
+                        let mean = (lower + upper) / 2.;
+                        let sd = (mean - lower) / 2.58; // 99% of values in range
+                        Ok(GenericFloatParam::Normal(Normal::new(mean, sd)))
+                    }
+                }
             }
         }
     }
@@ -629,7 +659,17 @@ impl FormationGenerator<Metres2D> for Simple2DFormationGenerator {
         let distance_y = self.distance_y.sample(rng);
         (
             Self::get_params(distance_x, distance_y),
-            simulation::SimpleFormation::new(2, Metres2D::zero(), vec![Metres2D { x: distance_x, y: distance_y }, Metres2D::zero()]),
+            simulation::SimpleFormation::new(
+                2,
+                Metres2D::zero(),
+                vec![
+                    Metres2D {
+                        x: distance_x,
+                        y: distance_y,
+                    },
+                    Metres2D::zero(),
+                ],
+            ),
         )
     }
 }

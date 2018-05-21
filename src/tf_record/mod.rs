@@ -243,7 +243,8 @@ impl<W: Write, S: Vector> ResultsWriter<W, S> {
         let info = self.info;
         self.info = None;
         match info {
-            Some(info) => self.out_stream
+            Some(info) => self
+                .out_stream
                 .finish()
                 .map(|writer| (info, writer))
                 .map_err(|e| TfRecordError::from(e)),
