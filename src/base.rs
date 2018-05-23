@@ -27,6 +27,7 @@ pub type Seconds = f64;
 pub type Metres = f64;
 pub type MetresPerSecond = f64;
 pub type Radians = f64;
+pub type RadiansPerSecond = f64;
 
 impl Vector for f64 {
     fn length(&self) -> f64 {
@@ -154,6 +155,10 @@ impl PolarMetres2D {
             y: self.r * self.theta.sin(),
         }
     }
+
+    pub fn new(r: f64, theta: f64) -> PolarMetres2D {
+        PolarMetres2D { r, theta }
+    }
 }
 
 impl Metres2D {
@@ -166,6 +171,10 @@ impl Metres2D {
 
     pub fn new(x: f64, y: f64) -> Metres2D {
         Metres2D { x, y }
+    }
+
+    pub fn angle(&self) -> Radians {
+        self.to_polar().theta
     }
 }
 

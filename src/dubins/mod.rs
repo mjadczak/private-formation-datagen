@@ -1,15 +1,82 @@
 use base::*;
 use failure::Fail;
 use std::f64;
+use std::fmt;
 use std::fmt::Display;
 use std::fmt::Error as FmtError;
 use std::fmt::Formatter;
+use std::iter;
+use std::iter::Peekable;
+use std::ops::Add;
 use std::slice;
+use std::f64::consts::PI;
 
 pub mod bindings;
 
 pub use self::bindings::DubinsPathType;
 use std::cell::Cell;
+use rand::Rng;
+use rand::distributions::{Distribution, Uniform};
+
+#[derive(Clone)]
+struct PeekableMap<I, F> {
+    iter: I,
+    fun: F,
+}
+
+impl<I, F> PeekableMap<I, F> {
+    pub fn new(iter: I, fun: F) -> Self {
+        PeekableMap { iter, fun }
+    }
+}
+
+impl<I: fmt::Debug, F> fmt::Debug for PeekableMap<I, F> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("PeekableMap")
+            .field("iter", &self.iter)
+            .finish()
+    }
+}
+
+impl<B, I, F> Iterator for PeekableMap<Peekable<I>, F>
+where
+    I: Iterator,
+    F: FnMut(<Peekable<I> as Iterator>::Item, Option<&<Peekable<I> as Iterator>::Item>) -> B,
+{
+    type Item = B;
+
+    #[inline]
+    fn next(&mut self) -> Option<B> {
+        self.iter
+            .next()
+            .map(|item| (self.fun)(item, self.iter.peek()))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+trait WithPeekableMap: Iterator {
+    fn map_with_peek<F, B>(self, f: F) -> PeekableMap<Self, F>
+    where
+        F: FnMut(<Self as Iterator>::Item, Option<&<Self as Iterator>::Item>) -> B,
+        Self: Sized;
+}
+
+impl<I> WithPeekableMap for Peekable<I>
+where
+    I: Iterator,
+{
+    fn map_with_peek<F, B>(self, f: F) -> PeekableMap<Self, F>
+    where
+        F: FnMut(<Self as Iterator>::Item, Option<&<Self as Iterator>::Item>) -> B,
+        Self: Sized,
+    {
+        PeekableMap::new(self, f)
+    }
+}
 
 #[derive(Debug, Fail)]
 pub enum DubinsError {
@@ -161,6 +228,10 @@ impl DubinsPath {
         Ok(endpoint.to_oriented_position())
     }
 
+    pub fn nominal_end(&self) -> OrientedPosition2D {
+        self.end
+    }
+
     pub fn subpath(&self, length: f64) -> Result<DubinsPath, DubinsError> {
         let mut path: bindings::DubinsPath = Default::default();
         unsafe {
@@ -200,8 +271,97 @@ impl DubinsPath {
             );
             DubinsError::from_c_errcode(res as _)?;
         }
-        results.push((self.length(), self.end));
         Ok(results)
+    }
+}
+
+pub struct MultiDubinsPath {
+    subpaths: Vec<DubinsPath>,
+    speed: MetresPerSecond,
+}
+
+impl MultiDubinsPath {
+    /// Output will have all points uniformly spaced in time _except the last one_.
+    pub fn to_uniform_dynamic_trajectory(
+        &self,
+        resolution: f64,
+    ) -> Vec<(
+        Seconds,
+        (Metres2D, Radians),
+        (MetresPerSecond, RadiansPerSecond),
+    )> {
+        let sampling_resolution = resolution * self.speed; // sample every n metres to achieve sampling every n seconds
+        let path_lengths: Vec<f64> = self
+            .subpaths
+            .iter()
+            .map(|subpath| subpath.length())
+            .collect();
+        self.subpaths
+            .iter()
+            .enumerate()
+            .flat_map(|(index, subpath)| {
+                // todo dirty hack here, would actually want to bail on first error
+                let data = subpath
+                    .to_uniform_data(sampling_resolution)
+                    .expect("Could not sample subpath");
+                let x_offset = path_lengths.iter().take(index).fold(0., Add::add);
+                data.into_iter()
+                    .map(move |(x, position)| ((x + x_offset) / self.speed, position))
+            })
+            .chain({
+                let total_length = path_lengths.iter().fold(0., Add::add);
+                let final_time = total_length / self.speed;
+                let last_position = self.subpaths.last().unwrap().nominal_end();
+                iter::once((final_time, last_position))
+            })
+            .peekable()
+            .map_with_peek(|this_config, next_config| {
+                let (now_time, now_position) = this_config;
+                let now_movement = if let Some(&(next_time, next_position)) = next_config {
+                    let speed = (next_position.position - now_position.position).length()
+                        / (next_time - now_time);
+                    let omega =
+                        (next_position.rotation - now_position.rotation) / (next_time - now_time);
+                    (speed, omega)
+                } else {
+                    (0., 0.)
+                };
+
+                (
+                    now_time,
+                    (now_position.position, now_position.rotation),
+                    now_movement,
+                )
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn generate<R: Rng + ?Sized>(turning_radius: Metres, speed: MetresPerSecond, min_length: Seconds, rng: &mut R, range: Metres) -> Result<Self, DubinsError> {
+        let min_distance = min_length * speed;
+        let mut subpaths: Vec<DubinsPath> = Vec::with_capacity(1);
+        let mut current_distance = 0.;
+        let mut end_config = OrientedPosition2D::new(0., 0., PI / 2.);
+        while current_distance < min_distance {
+            let start_config = end_config;
+            end_config = Self::random_config(rng, range);
+            let subpath = DubinsPath::new_shortest(start_config, end_config, turning_radius)?;
+            current_distance += subpath.length();
+            subpaths.push(subpath);
+        }
+
+        Ok(MultiDubinsPath {
+            subpaths,
+            speed
+        })
+    }
+
+    fn random_config<R: Rng + ?Sized>(rng: &mut R, range: Metres) -> OrientedPosition2D {
+        let pos_dist = Uniform::new_inclusive(-range, range);
+        let x = pos_dist.sample(rng);
+        let y = pos_dist.sample(rng);
+        let rot_dist = Uniform::new(0., 2. * PI);
+        let theta = rot_dist.sample(rng);
+        OrientedPosition2D::new(x, y, theta)
     }
 }
 
@@ -209,6 +369,7 @@ impl DubinsPath {
 mod tests {
     use super::*;
     use base::*;
+    use rand::thread_rng;
 
     #[test]
     fn basic_dubins() {
@@ -223,5 +384,13 @@ mod tests {
             path.segment_length(2),
         ];
         println!("{:?}(L{:?}): {:?}({:?})", data, path.length(), shape, lens);
+    }
+
+    #[test]
+    fn multi_dubins() {
+        let mut rng = thread_rng();
+        let multi = MultiDubinsPath::generate(1., 2., 15., &mut rng, 10.).expect("could not generate");
+        let data = multi.to_uniform_dynamic_trajectory(0.5);
+        println!("{:?}", data);
     }
 }

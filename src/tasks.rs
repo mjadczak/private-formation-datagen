@@ -2,7 +2,8 @@ use base::*;
 use failure::Error;
 use num::Zero;
 use rand::distributions::{Distribution, Normal, Range, StandardNormal, Uniform};
-use rand::{FromEntropy, Rng, SmallRng};
+use rand::{FromEntropy, Rng};
+use rand::rngs::SmallRng;
 use serde_yaml;
 use simulation;
 use simulation::Simulation;
@@ -147,7 +148,7 @@ impl ParamsSpec {
         match *spec {
             RandomParamSpec::Uniform { range } => {
                 let (lower, upper) = range;
-                let val = Range::sample_single(lower, upper, rng);
+                let val = Uniform::new_inclusive(lower, upper).sample(rng);
                 (key, ConstantParam::Float(val))
             }
             RandomParamSpec::Normal { range } => {

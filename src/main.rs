@@ -20,6 +20,9 @@ extern crate log;
 extern crate pretty_env_logger;
 #[macro_use]
 extern crate slugify;
+extern crate specs;
+#[macro_use]
+extern crate specs_derive;
 
 pub mod base;
 pub mod dubins;
