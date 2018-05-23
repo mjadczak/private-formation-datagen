@@ -43,7 +43,7 @@ impl Vector for f64 {
     }
 }
 
-#[derive(PartialEq, PartialOrd, Copy, Clone, Debug, Default)]
+#[derive(PartialEq, PartialOrd, Copy, Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Metres2D {
     pub x: f64,
     pub y: f64,
@@ -178,7 +178,7 @@ impl Metres2D {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, Deserialize, Serialize)]
 pub struct OrientedPosition2D {
     pub position: Metres2D,
     /// Anticlockwise rotation

@@ -1,13 +1,16 @@
 use base::*;
+use dubins::MultiDubinsPath;
 use failure::Error;
 use num::Zero;
 use rand::distributions::{Distribution, Normal, Range, StandardNormal, Uniform};
 use rand::rngs::SmallRng;
+use rand::thread_rng;
 use rand::{FromEntropy, Rng};
 use serde_yaml;
 use simulation;
 use simulation::Simulation;
 use simulation::SimulationResult;
+use simulation_2d::{self, DesaiControl, NonHolonomicDynamics, NonHolonomicRobotSpec};
 use slugify::slugify;
 use std;
 use std::collections::HashMap;
@@ -672,5 +675,239 @@ impl FormationGenerator<Metres2D> for Simple2DFormationGenerator {
                 ],
             ),
         )
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GenericScenarioSpec {
+    pub name: String,
+    pub working_dir: String,
+    pub slug: Option<String>,
+    // todo maybe observer?
+    pub resolution: f64,
+    pub length: f64,
+    pub turning_radius: Metres,
+    pub speed: MetresPerSecond,
+    pub robot_ids: Vec<String>,
+    pub num_per_configuration: usize,
+    pub configurations: Vec<Vec<DesaiRobotSpec>>,
+    pub origin: Metres2D,
+    pub arena_size: Metres,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct DesaiRobotSpec {
+    id: String,
+    initial_position: OrientedPosition2D,
+    control: DesaiControlSpec,
+}
+
+impl DesaiRobotSpec {
+    pub fn to_real_spec<F>(&self, generator: &mut F) -> NonHolonomicRobotSpec
+    where
+        F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
+    {
+        NonHolonomicRobotSpec {
+            id: self.id.clone(),
+            initial_configuration: self.initial_position,
+            control: self.control.to_control(generator, self.initial_position),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum DesaiControlSpec {
+    Leader,
+    LPsi { leader: String },
+    LL { leaders: (String, String) },
+}
+
+impl DesaiControlSpec {
+    pub fn to_control<F>(
+        &self,
+        generator: &mut F,
+        initial_position: OrientedPosition2D,
+    ) -> DesaiControl
+    where
+        F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
+    {
+        match *self {
+            DesaiControlSpec::LPsi { ref leader } => DesaiControl::LPsi {
+                leader: leader.clone(),
+            },
+            DesaiControlSpec::LL { ref leaders } => DesaiControl::LL {
+                leaders: leaders.clone(),
+            },
+            DesaiControlSpec::Leader => DesaiControl::Prescribed {
+                path: generator(initial_position),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GenericDatasetDescription {
+    pub num_robots: usize,
+    pub robot_ids: Vec<String>,
+    pub points_per_trajectory: usize,
+    pub resolution: f64,
+    pub features: Params,
+    pub files: Vec<GenericDataFileDescription>,
+    //todo perhaps some kind of performance measure?
+}
+
+#[derive(Default, Debug)]
+struct GenericScenarioExecutionContext {
+    working_dir: PathBuf,
+    slug: String,
+    info_file_path: PathBuf,
+    data_dir: PathBuf,
+    description: GenericDatasetDescription,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GenericDataFileDescription {
+    pub file: String,
+    pub num_trajectories: usize,
+    pub features: Params,
+    pub configuration: Vec<DesaiRobotSpec>,
+    pub per_trajectory_features: Vec<Params>,
+}
+
+impl GenericScenarioExecutionContext {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    fn execute(mut self, spec: GenericScenarioSpec) -> Result<PathBuf> {
+        self.working_dir = PathBuf::from(&spec.working_dir);
+        self.slug = if let Some(ref slug) = spec.slug {
+            slug.clone()
+        } else {
+            Self::get_prefix() + &slugify(&spec.name, "", "_", None)
+        };
+        self.info_file_path = self.working_dir.join(&self.slug);
+        self.info_file_path.set_extension("gdginfo.yaml");
+        self.data_dir = self.working_dir.join(self.slug.clone() + "-data");
+
+        debug!(
+            "Working dir is {:?}, data dir is {:?}",
+            self.working_dir, self.data_dir
+        );
+
+        std::fs::create_dir_all(&self.data_dir)?;
+
+        self.description.robot_ids = spec.robot_ids;
+        self.description.num_robots = self.description.robot_ids.len();
+        self.description.resolution = spec.resolution;
+        self.description.points_per_trajectory = (spec.length / spec.resolution) as usize + 1;
+        let mut features = Params::with_capacity(5);
+        features.insert(
+            "turning_radius".to_string(),
+            ConstantParam::Float(spec.turning_radius),
+        );
+        features.insert("speed".to_string(), ConstantParam::Float(spec.speed));
+        features.insert(
+            "arena_size".to_string(),
+            ConstantParam::Float(spec.arena_size),
+        );
+        features.insert("origin_x".to_string(), ConstantParam::Float(spec.origin.x));
+        features.insert("origin_y".to_string(), ConstantParam::Float(spec.origin.y));
+        self.description.features = features;
+
+        let mut rng = thread_rng();
+        let turning_radius = spec.turning_radius;
+        let speed = spec.speed;
+        let min_length = spec.length;
+        let arena_size = spec.arena_size;
+        let mut traj_generator = |initial: OrientedPosition2D| {
+            MultiDubinsPath::generate(
+                turning_radius,
+                speed,
+                min_length,
+                &mut rng,
+                initial,
+                arena_size,
+            ).expect("could not generate leader path")
+        };
+
+        let config_num_width = spec.configurations.len().to_string().len();
+
+        for (config_num, configuration) in spec.configurations.into_iter().enumerate() {
+            let leader_ids: Vec<i64> = configuration
+                .iter()
+                .filter_map(|c| match c.control {
+                    DesaiControlSpec::Leader => Some(self
+                        .description
+                        .robot_ids
+                        .iter()
+                        .position(|id| *id == c.id)
+                        .unwrap() as i64),
+                    _ => None,
+                })
+                .collect();
+            debug!("Processing configuration number {}", config_num);
+            let mut file_description: GenericDataFileDescription = Default::default();
+            let file_name = format!(
+                "data{:0width$}.tfrecord",
+                config_num,
+                width = config_num_width
+            );
+            let file_path = self.data_dir.join(&file_name);
+            file_description.file = file_path
+                .strip_prefix(&self.working_dir)?
+                .to_str()
+                .ok_or(format_err!("weird characters in filename"))?
+                .to_string();
+            file_description.num_trajectories = spec.num_per_configuration;
+
+            let data_file = File::create(file_path)?;
+            let mut writer = tf_record::GenericTfWriter::from_writer(data_file);
+
+            for idx in 0..spec.num_per_configuration {
+                let robots: Vec<NonHolonomicRobotSpec> = configuration
+                    .iter()
+                    .map(|c| c.to_real_spec(&mut traj_generator))
+                    .collect();
+
+                let mut results = simulation_2d::do_simulation(robots);
+                let times: Vec<f64> = results
+                    .iter()
+                    .take(1)
+                    .flat_map(|(_key, data)| data.iter().map(|(time, _pos)| *time))
+                    .collect();
+
+                let per_robot_data: Vec<Vec<(Seconds, NonHolonomicDynamics)>> = self
+                    .description
+                    .robot_ids
+                    .iter()
+                    .map(|name| results.remove(name).unwrap())
+                    .collect();
+
+                let mut features: HashMap<String, tf_record::TfFeature> = HashMap::with_capacity(1);
+                features.insert(
+                    "leaders".to_string(),
+                    tf_record::TfFeature::Ints(leader_ids.clone()),
+                );
+                writer.write_record(features, per_robot_data)?;
+            }
+
+            file_description.configuration = configuration;
+            self.description.files.push(file_description);
+            writer.finish()?;
+        }
+
+        let mut info_file = File::create(&self.info_file_path)?;
+        write!(&mut info_file, "# datagen-generic-info v2.2\n")?;
+        serde_yaml::to_writer(&mut info_file, &self.description)?;
+
+        info!("Finished writing file {:?}", self.info_file_path);
+
+        Ok(self.info_file_path)
+    }
+
+    fn get_prefix() -> String {
+        time::strftime("gdg-%Y_%m_%d-%H_%M_%S-", &time::now()).unwrap()
     }
 }

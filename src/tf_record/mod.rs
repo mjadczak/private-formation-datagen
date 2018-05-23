@@ -109,14 +109,20 @@ impl<W: Write> GenericTfWriter<W> {
         self.out_stream.finish().map_err(|e| TfRecordError::from(e))
     }
 
-    pub fn write_record<D>(&mut self, record_meta: HashMap<String, TfFeature>, robot_data: Vec<Vec<D>>) -> TfRecordResult<()>
-        where D: ToFloatFeatures
+    pub fn write_record<D>(
+        &mut self,
+        record_meta: HashMap<String, TfFeature>,
+        robot_data: Vec<Vec<D>>,
+    ) -> TfRecordResult<()>
+    where
+        D: ToFloatFeatures,
     {
         let num_robots = robot_data.len();
         let robot_feature_names = D::repr();
         let num_robot_features = robot_feature_names.len();
 
-        let mut features: HashMap<String, Feature> = HashMap::with_capacity(record_meta.len() + num_robots * num_robot_features);
+        let mut features: HashMap<String, Feature> =
+            HashMap::with_capacity(record_meta.len() + num_robots * num_robot_features);
 
         for (key, feature) in record_meta {
             let mut feat = Feature::new();
@@ -125,7 +131,7 @@ impl<W: Write> GenericTfWriter<W> {
                     let mut list = FloatList::new();
                     list.value = floats.into_iter().map(|f| f as f32).collect();
                     feat.set_float_list(list);
-                },
+                }
                 TfFeature::Ints(ints) => {
                     let mut list = Int64List::new();
                     list.value = ints;

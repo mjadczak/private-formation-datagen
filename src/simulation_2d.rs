@@ -105,6 +105,16 @@ impl ToFloatFeatures for NonHolonomicDynamics {
     }
 }
 
+impl ToFloatFeatures for (Seconds, NonHolonomicDynamics) {
+    fn repr() -> &'static [&'static str] {
+        <NonHolonomicDynamics as ToFloatFeatures>::repr()
+    }
+
+    fn to_float_features(&self) -> Vec<f64> {
+        self.1.to_float_features()
+    }
+}
+
 #[derive(Debug, Component)]
 struct LPsiControl {
     leader: Entity,
