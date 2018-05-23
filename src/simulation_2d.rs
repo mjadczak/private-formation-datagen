@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::ops::AddAssign;
 use std::ops::Index;
+use tf_record::ToFloatFeatures;
 
 // Extra maths
 trait MathExt {
@@ -85,6 +86,22 @@ impl NonHolonomicDynamics {
         let psi = (l_vec.angle().mod2pi() - self.heading).mod2pi();
         let gamma = (self.heading + psi - follower.heading).mod2pi();
         (l, psi, gamma)
+    }
+}
+
+impl ToFloatFeatures for NonHolonomicDynamics {
+    fn repr() -> &'static [&'static str] {
+        &["x", "y", "r", "v", "w"]
+    }
+
+    fn to_float_features(&self) -> Vec<f64> {
+        vec![
+            self.position.x,
+            self.position.y,
+            self.heading,
+            self.speed,
+            self.angular_velocity,
+        ]
     }
 }
 

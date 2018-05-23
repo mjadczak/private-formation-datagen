@@ -83,6 +83,107 @@ impl From<protobuf::ProtobufError> for TfRecordError {
     }
 }
 
+pub trait ToFloatFeatures {
+    fn repr() -> &'static [&'static str];
+    fn to_float_features(&self) -> Vec<f64>;
+}
+
+pub enum TfFeature {
+    Floats(Vec<f64>),
+    Ints(Vec<i64>),
+}
+
+#[derive(Debug)]
+pub struct GenericTfWriter<W: Write> {
+    out_stream: ZlibEncoder<W>,
+}
+
+impl<W: Write> GenericTfWriter<W> {
+    pub fn from_writer(writer: W) -> GenericTfWriter<W> {
+        GenericTfWriter {
+            out_stream: ZlibEncoder::new(writer, Default::default()),
+        }
+    }
+
+    pub fn finish(self) -> TfRecordResult<W> {
+        self.out_stream.finish().map_err(|e| TfRecordError::from(e))
+    }
+
+    pub fn write_record<D>(&mut self, record_meta: HashMap<String, TfFeature>, robot_data: Vec<Vec<D>>) -> TfRecordResult<()>
+        where D: ToFloatFeatures
+    {
+        let num_robots = robot_data.len();
+        let robot_feature_names = D::repr();
+        let num_robot_features = robot_feature_names.len();
+
+        let mut features: HashMap<String, Feature> = HashMap::with_capacity(record_meta.len() + num_robots * num_robot_features);
+
+        for (key, feature) in record_meta {
+            let mut feat = Feature::new();
+            match feature {
+                TfFeature::Floats(floats) => {
+                    let mut list = FloatList::new();
+                    list.value = floats.into_iter().map(|f| f as f32).collect();
+                    feat.set_float_list(list);
+                },
+                TfFeature::Ints(ints) => {
+                    let mut list = Int64List::new();
+                    list.value = ints;
+                    feat.set_int64_list(list);
+                }
+            }
+            features.insert(key, feat);
+        }
+
+        for (robot_id, robot) in robot_data.into_iter().enumerate() {
+            let mut this_feature_values: Vec<Vec<f32>> = vec![Vec::new(); num_robot_features];
+
+            for record in robot {
+                let data = record.to_float_features();
+                for (idx, value) in data.into_iter().enumerate() {
+                    this_feature_values[idx].push(value as f32);
+                }
+            }
+
+            for (idx, values) in this_feature_values.into_iter().enumerate() {
+                let name = format!("x{}_{}", robot_id, robot_feature_names[idx]);
+                let mut list = FloatList::new();
+                list.value = values;
+                let mut feat = Feature::new();
+                feat.set_float_list(list);
+                features.insert(name, feat);
+            }
+        }
+
+        // make the example
+        let mut features_msg = Features::new();
+        features_msg.set_feature(features);
+        let mut example = Example::new();
+        example.set_features(features_msg);
+
+        let data_length = example.compute_size() as u64;
+
+        // Format of a single record:
+        // all fields little-endian
+        //  uint64    length
+        //  uint32    masked crc of length
+        //  byte      data[length]
+        //  uint32    masked crc of data
+
+        self.out_stream.write_u64::<LE>(data_length)?;
+        self.out_stream
+            .write_u32::<LE>(masked_crc32c_u64(data_length))?;
+        let data_crc = {
+            let mut writer = Crc32CWriter::new(&mut self.out_stream);
+            example.write_to_writer(&mut writer)?;
+            writer.finish()
+        };
+        self.out_stream.write_u32::<LE>(data_crc)?;
+
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct ResultsWriter<W: Write, S: Vector> {
     info: Option<DataInfo>,
@@ -96,7 +197,7 @@ impl<S: Vector> ResultsWriter<fs::File, S> {
     /// This path must be a folder, but does not have to exist.
     pub fn from_path<P: AsRef<Path>>(path: P) -> TfRecordResult<ResultsWriter<fs::File, S>> {
         let path = path.as_ref();
-        if path.exists() && !path.is_dir() {
+        if path.exists() & &!path.is_dir() {
             return Err(TfRecordError::from_str(
                 "the input path must be a directory",
             ));
