@@ -1,8 +1,8 @@
 use base::*;
 use pid_control::{Controller as PIDControllerT, PIDController as PIDControllerImpl};
 use rand::distributions::StandardNormal;
-use rand::{FromEntropy, Rng};
 use rand::rngs::SmallRng;
+use rand::{FromEntropy, Rng};
 use trajectory::NaiveTrajectory;
 
 pub trait Controller<S: Vector>: Clone {

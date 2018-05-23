@@ -1,8 +1,8 @@
 use base::*;
 use num::Zero;
 use rand::distributions::{Distribution, Normal, Standard, Uniform};
-use rand::{thread_rng, Rng, SeedableRng};
 use rand::rngs::SmallRng;
+use rand::{thread_rng, Rng, SeedableRng};
 use std::f64::consts::PI;
 use std::ops::Index;
 

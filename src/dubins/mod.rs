@@ -1,6 +1,8 @@
 use base::*;
 use failure::Fail;
+use num::Zero;
 use std::f64;
+use std::f64::consts::PI;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Error as FmtError;
@@ -9,14 +11,13 @@ use std::iter;
 use std::iter::Peekable;
 use std::ops::Add;
 use std::slice;
-use std::f64::consts::PI;
 
 pub mod bindings;
 
 pub use self::bindings::DubinsPathType;
-use std::cell::Cell;
-use rand::Rng;
 use rand::distributions::{Distribution, Uniform};
+use rand::Rng;
+use std::cell::Cell;
 
 #[derive(Clone)]
 struct PeekableMap<I, F> {
@@ -134,6 +135,7 @@ impl ConvertibleToOrientedPosition2D for Configuration {
     }
 }
 
+#[derive(Debug)]
 pub struct DubinsPath {
     inner: Cell<bindings::DubinsPath>,
     end: OrientedPosition2D,
@@ -275,14 +277,16 @@ impl DubinsPath {
     }
 }
 
+#[derive(Debug)]
 pub struct MultiDubinsPath {
     subpaths: Vec<DubinsPath>,
     speed: MetresPerSecond,
+    total_length: Metres,
+    path_lengths: Vec<Metres>,
 }
 
 impl MultiDubinsPath {
-    /// Output will have all points uniformly spaced in time _except the last one_.
-    pub fn to_uniform_dynamic_trajectory(
+    pub fn to_dynamic_trajectory(
         &self,
         resolution: f64,
     ) -> Vec<(
@@ -291,11 +295,7 @@ impl MultiDubinsPath {
         (MetresPerSecond, RadiansPerSecond),
     )> {
         let sampling_resolution = resolution * self.speed; // sample every n metres to achieve sampling every n seconds
-        let path_lengths: Vec<f64> = self
-            .subpaths
-            .iter()
-            .map(|subpath| subpath.length())
-            .collect();
+
         self.subpaths
             .iter()
             .enumerate()
@@ -304,13 +304,12 @@ impl MultiDubinsPath {
                 let data = subpath
                     .to_uniform_data(sampling_resolution)
                     .expect("Could not sample subpath");
-                let x_offset = path_lengths.iter().take(index).fold(0., Add::add);
+                let x_offset = self.path_lengths.iter().take(index).fold(0., Add::add);
                 data.into_iter()
                     .map(move |(x, position)| ((x + x_offset) / self.speed, position))
             })
             .chain({
-                let total_length = path_lengths.iter().fold(0., Add::add);
-                let final_time = total_length / self.speed;
+                let final_time = self.total_length / self.speed;
                 let last_position = self.subpaths.last().unwrap().nominal_end();
                 iter::once((final_time, last_position))
             })
@@ -336,32 +335,84 @@ impl MultiDubinsPath {
             .collect::<Vec<_>>()
     }
 
-    pub fn generate<R: Rng + ?Sized>(turning_radius: Metres, speed: MetresPerSecond, min_length: Seconds, rng: &mut R, range: Metres) -> Result<Self, DubinsError> {
+    pub fn generate<R: Rng + ?Sized>(
+        turning_radius: Metres,
+        speed: MetresPerSecond,
+        min_length: Seconds,
+        rng: &mut R,
+        origin: OrientedPosition2D,
+        range: Metres,
+    ) -> Result<Self, DubinsError> {
         let min_distance = min_length * speed;
         let mut subpaths: Vec<DubinsPath> = Vec::with_capacity(1);
         let mut current_distance = 0.;
-        let mut end_config = OrientedPosition2D::new(0., 0., PI / 2.);
+        let mut end_config = origin;
         while current_distance < min_distance {
             let start_config = end_config;
-            end_config = Self::random_config(rng, range);
+            end_config = Self::random_config(rng, range, origin.position);
             let subpath = DubinsPath::new_shortest(start_config, end_config, turning_radius)?;
             current_distance += subpath.length();
             subpaths.push(subpath);
         }
+        let path_lengths: Vec<Metres> = subpaths.iter().map(|subpath| subpath.length()).collect();
+        let total_length = path_lengths.iter().fold(0., Add::add);
 
         Ok(MultiDubinsPath {
             subpaths,
-            speed
+            speed,
+            total_length,
+            path_lengths,
         })
     }
 
-    fn random_config<R: Rng + ?Sized>(rng: &mut R, range: Metres) -> OrientedPosition2D {
+    pub fn length(&self) -> Seconds {
+        self.total_length / self.speed
+    }
+
+    pub fn sample(&self, t: Seconds) -> Result<(Metres2D, Radians), DubinsError> {
+        let mut sampling_distance = t * self.speed;
+        if sampling_distance > self.total_length {
+            return Err(DubinsError::PathParametrisationError);
+        }
+
+        let mut sample: (Metres2D, Radians) = Default::default();
+        for path in self.subpaths.iter() {
+            if path.length() < sampling_distance {
+                sampling_distance -= path.length();
+                continue;
+            }
+
+            let o_pos = path.sample(sampling_distance)?;
+            sample = (o_pos.position, o_pos.rotation);
+            break;
+        }
+
+        Ok(sample)
+    }
+
+    pub fn endpoint(&self) -> (Metres2D, Radians) {
+        match self.subpaths.last() {
+            None => (Metres2D::zero(), PI / 2.),
+            Some(path) => {
+                let endpoint = path.nominal_end();
+                (endpoint.position, endpoint.rotation)
+            }
+        }
+    }
+
+    fn random_config<R: Rng + ?Sized>(
+        rng: &mut R,
+        range: Metres,
+        origin: Metres2D,
+    ) -> OrientedPosition2D {
         let pos_dist = Uniform::new_inclusive(-range, range);
         let x = pos_dist.sample(rng);
         let y = pos_dist.sample(rng);
         let rot_dist = Uniform::new(0., 2. * PI);
         let theta = rot_dist.sample(rng);
-        OrientedPosition2D::new(x, y, theta)
+        let mut pos = OrientedPosition2D::new(x, y, theta);
+        pos.position += origin;
+        pos
     }
 }
 
@@ -389,8 +440,10 @@ mod tests {
     #[test]
     fn multi_dubins() {
         let mut rng = thread_rng();
-        let multi = MultiDubinsPath::generate(1., 2., 15., &mut rng, 10.).expect("could not generate");
-        let data = multi.to_uniform_dynamic_trajectory(0.5);
+        let origin = OrientedPosition2D::new(0., 0., PI / 2.);
+        let multi = MultiDubinsPath::generate(1., 2., 15., &mut rng, origin, 10.)
+            .expect("could not generate");
+        let data = multi.to_dynamic_trajectory(0.5);
         println!("{:?}", data);
     }
 }

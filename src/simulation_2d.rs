@@ -1,5 +1,7 @@
 use base::*;
+use dubins::MultiDubinsPath;
 use specs::prelude::*;
+use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::ops::AddAssign;
 use std::ops::Index;
@@ -27,25 +29,39 @@ const A2: f64 = 0.25;
 type UniformDynamicTrajectory = Vec<(Seconds, NonHolonomicDynamics)>;
 
 /// Contains the uniform resolution index, as well as the actual clock time, for assertions
-#[derive(Default)]
-struct GlobalUniformTime {}
+#[derive(Debug, Default)]
+struct GlobalUniformTime {
+    resolution: Seconds,
+    ticks: usize,
+}
 
 impl GlobalUniformTime {
     pub fn sim_delta(&self) -> Seconds {
-        unimplemented!();
+        self.resolution
     }
 
     pub fn sim_time(&self) -> Seconds {
-        unimplemented!();
+        (self.ticks as f64) * self.resolution
     }
 
     pub fn sim_index(&self) -> usize {
-        unimplemented!();
+        self.ticks
+    }
+
+    pub fn tick(&mut self) {
+        self.ticks += 1;
+    }
+
+    pub fn new(resolution: Seconds) -> Self {
+        GlobalUniformTime {
+            resolution,
+            ticks: 0,
+        }
     }
 }
 
 #[derive(Debug, Component, Copy, Clone)]
-struct NonHolonomicDynamics {
+pub struct NonHolonomicDynamics {
     pub position: Metres2D,
     pub heading: Radians,
     pub speed: MetresPerSecond,
@@ -62,10 +78,6 @@ impl NonHolonomicDynamics {
         self.position + PolarMetres2D::new(D, self.heading).to_cartesian()
     }
 
-    pub fn set_from(&mut self, other: &Self) {
-        *self = other.clone()
-    }
-
     /// Calculates l, psi and gamma between self and a follower
     pub fn calculate_control_parameters(&self, follower: &Self) -> (Metres, Radians, Radians) {
         let l_vec = follower.caster_position() - self.position;
@@ -75,10 +87,6 @@ impl NonHolonomicDynamics {
         (l, psi, gamma)
     }
 }
-
-#[derive(Debug, Component, Default)]
-#[storage(NullStorage)]
-struct Follower;
 
 #[derive(Debug, Component)]
 struct LPsiControl {
@@ -108,6 +116,19 @@ impl LPsiControl {
         let speed = rho_12 - D * angular_velocity * gamma_1.tan();
         (speed, angular_velocity)
     }
+
+    pub fn from_positions(
+        follower: &NonHolonomicDynamics,
+        leader: &NonHolonomicDynamics,
+        leader_entity: Entity,
+    ) -> Self {
+        let (l_12_d, psi_12_d, _) = leader.calculate_control_parameters(follower);
+        LPsiControl {
+            leader: leader_entity,
+            l_12_d,
+            psi_12_d,
+        }
+    }
 }
 
 #[derive(Debug, Component)]
@@ -119,6 +140,21 @@ struct LLControl {
 }
 
 impl LLControl {
+    pub fn from_positions(
+        follower: &NonHolonomicDynamics,
+        (leader1, leader2): (&NonHolonomicDynamics, &NonHolonomicDynamics),
+        (leader1_e, leader2_e): (Entity, Entity),
+    ) -> Self {
+        let (l_13_d, _, _) = leader1.calculate_control_parameters(follower);
+        let (l_23_d, _, _) = leader2.calculate_control_parameters(follower);
+        LLControl {
+            l_13_d,
+            l_23_d,
+            leader1: leader1_e,
+            leader2: leader2_e,
+        }
+    }
+
     pub fn leaders(&self) -> (Entity, Entity) {
         (self.leader1, self.leader2)
     }
@@ -144,22 +180,106 @@ impl LLControl {
 }
 
 #[derive(Debug, Component)]
-struct PrescribedControl(UniformDynamicTrajectory);
+struct PrescribedControl {
+    path: MultiDubinsPath,
+    path_length: Seconds,
+}
 
-impl Index<usize> for PrescribedControl {
-    type Output = (Seconds, NonHolonomicDynamics);
+// this is theoretically unsound (since DubinsPaths have Cells), but we know we won't be accessing this component from more than one thread at a time
+unsafe impl Sync for PrescribedControl {}
 
-    fn index(&self, index: usize) -> &<Self as Index<usize>>::Output {
-        &self.0[index]
+impl PrescribedControl {
+    pub fn new(path: MultiDubinsPath) -> Self {
+        let path_length = path.length();
+        PrescribedControl { path, path_length }
+    }
+
+    pub fn sample(&self, t: Seconds, resolution: Seconds) -> NonHolonomicDynamics {
+        if t > self.path_length {
+            let (position, heading) = self.path.endpoint();
+            return NonHolonomicDynamics {
+                position,
+                heading,
+                angular_velocity: 0.,
+                speed: 0.,
+            };
+        }
+
+        let (position, heading) = self.path.sample(t).expect("Invalid t parameter given");
+        let (next_t, next_position, next_heading) = {
+            let next_t = t + resolution;
+            if next_t > self.path_length {
+                let (pos, rot) = self.path.endpoint();
+                (self.path_length, pos, rot)
+            } else {
+                let (pos, rot) = self
+                    .path
+                    .sample(next_t)
+                    .expect("Invalid t parameter in next point sampling");
+                (next_t, pos, rot)
+            }
+        };
+        let delta_t = next_t - t;
+        let speed = (next_position - position).length() / delta_t;
+        let angular_velocity = (next_heading - heading) / delta_t;
+
+        NonHolonomicDynamics {
+            position,
+            heading,
+            speed,
+            angular_velocity,
+        }
     }
 }
 
 #[derive(Debug, Component)]
-#[storage(VecStorage)]
-struct RobotId(u32);
+struct RobotId(String);
 
 #[derive(Debug, Component)]
-struct TrackedDynamicTrajectory(UniformDynamicTrajectory);
+struct TrackedDynamicTrajectory {
+    data: UniformDynamicTrajectory,
+    resolution_ticks: usize,
+}
+
+impl TrackedDynamicTrajectory {
+    pub fn feed(&mut self, time: &GlobalUniformTime, dynamics: NonHolonomicDynamics) {
+        if time.sim_index() % self.resolution_ticks != 0 {
+            return;
+        }
+
+        self.data.push((time.sim_time(), dynamics));
+    }
+
+    pub fn new(time: &GlobalUniformTime, resolution: Seconds) -> Self {
+        let resolution_ticks = (resolution / time.sim_delta()).round() as usize;
+        TrackedDynamicTrajectory {
+            resolution_ticks,
+            data: Vec::new(),
+        }
+    }
+
+    pub fn into_data(self) -> UniformDynamicTrajectory {
+        self.data
+    }
+}
+
+struct TrackTrajectories;
+
+impl<'a> System<'a> for TrackTrajectories {
+    type SystemData = (
+        Read<'a, GlobalUniformTime>,
+        ReadStorage<'a, NonHolonomicDynamics>,
+        WriteStorage<'a, TrackedDynamicTrajectory>,
+    );
+
+    fn run(&mut self, (time, dynamics, mut trajectories): Self::SystemData) {
+        use specs::Join;
+
+        for (dynamic, trajectory) in (&dynamics, &mut trajectories).join() {
+            trajectory.feed(&*time, *dynamic);
+        }
+    }
+}
 
 struct ApplyNonHolonomicDynamics;
 
@@ -180,13 +300,9 @@ impl<'a> System<'a> for ApplyNonHolonomicDynamics {
         }
 
         // leaders
-        let sim_index = time.sim_index();
-        let sim_time = time.sim_time();
-
         for (dynamic, control) in (&mut dynamics, &prescribed).join() {
-            let (t, new_data) = control[sim_index];
-            debug_assert_eq!(t, sim_time);
-            dynamic.set_from(&new_data);
+            let new_data = control.sample(time.sim_time(), time.sim_delta());
+            *dynamic = new_data;
         }
     }
 }
@@ -253,5 +369,187 @@ impl<'a> System<'a> for ApplyControl {
         }
 
         self.new_dynamics.clear();
+    }
+}
+
+pub struct NonHolonomicRobotSpec {
+    pub id: String,
+    pub initial_configuration: OrientedPosition2D,
+    pub control: DesaiControl,
+}
+
+pub enum DesaiControl {
+    Prescribed { path: MultiDubinsPath },
+    LPsi { leader: String },
+    LL { leaders: (String, String) },
+}
+
+pub fn do_simulation(
+    robots: Vec<NonHolonomicRobotSpec>,
+) -> HashMap<String, UniformDynamicTrajectory> {
+    let mut world = World::new();
+    let sim_resolution = 1. / 64.;
+    let track_resolution = 1. / 8.;
+    world.add_resource(GlobalUniformTime::new(sim_resolution));
+    let sim_time = 10.;
+    let num_robots = robots.len();
+
+    let mut dispatcher = DispatcherBuilder::new()
+        .with(ApplyNonHolonomicDynamics, "apply_dynamics", &[])
+        .with(ApplyControl::new(), "apply_control", &["apply_dynamics"])
+        .with(
+            TrackTrajectories,
+            "track_trajectories",
+            &["apply_dynamics", "apply_control"],
+        )
+        .build();
+
+    dispatcher.setup(&mut world.res);
+    world.register::<RobotId>();
+
+    // add robots
+
+    let robot_entities: HashMap<String, Entity> = robots
+        .iter()
+        .map(|robot| {
+            let dynamics = NonHolonomicDynamics {
+                position: robot.initial_configuration.position,
+                heading: robot.initial_configuration.rotation,
+                speed: 0.,
+                angular_velocity: 0.,
+            };
+            let tracking = {
+                let time = world.read_resource::<GlobalUniformTime>();
+                TrackedDynamicTrajectory::new(&*time, track_resolution)
+            };
+            let entity = world
+                .create_entity()
+                .with(dynamics)
+                .with(tracking)
+                .with(RobotId(robot.id.clone()))
+                .build();
+            (robot.id.clone(), entity)
+        })
+        .collect();
+
+    // add control to the robots
+
+    for spec in robots {
+        let entity = *robot_entities.get(&spec.id).unwrap();
+        match spec.control {
+            DesaiControl::Prescribed { path } => {
+                let control = PrescribedControl::new(path);
+                world
+                    .write_storage::<PrescribedControl>()
+                    .insert(entity, control)
+                    .expect("Prescribed control already present");
+            }
+            DesaiControl::LPsi { leader } => {
+                // todo possibly make the whole function return a Result in case e.g. ids are incorrect
+                let leader_entity = *robot_entities
+                    .get(&leader)
+                    .expect("L-Psi leader was not found");
+                let dynamics = world.read_storage::<NonHolonomicDynamics>();
+                let control = LPsiControl::from_positions(
+                    dynamics.get(entity).unwrap(),
+                    dynamics.get(leader_entity).unwrap(),
+                    leader_entity,
+                );
+                world
+                    .write_storage::<LPsiControl>()
+                    .insert(entity, control)
+                    .expect("L-Psi control already present");
+            }
+            DesaiControl::LL { leaders } => {
+                let (lid1, lid2) = leaders;
+                let (le1, le2) = (
+                    *robot_entities.get(&lid1).expect("LL leader 1 not found"),
+                    *robot_entities.get(&lid2).expect("LL leader 2 not found"),
+                );
+                let dynamics = world.read_storage::<NonHolonomicDynamics>();
+                let ld = (dynamics.get(le1).unwrap(), dynamics.get(le2).unwrap());
+                let control =
+                    LLControl::from_positions(dynamics.get(entity).unwrap(), ld, (le1, le2));
+                world
+                    .write_storage::<LLControl>()
+                    .insert(entity, control)
+                    .expect("L-L control already present");
+            }
+        }
+    }
+
+    // run simulation
+
+    loop {
+        dispatcher.dispatch(&mut world.res);
+        let mut time = world.write_resource::<GlobalUniformTime>();
+        if time.sim_time() >= sim_time {
+            break;
+        }
+        time.tick();
+    }
+
+    // extract trajectories
+
+    let mut trajectory_map: HashMap<String, UniformDynamicTrajectory> =
+        HashMap::with_capacity(num_robots);
+    let mut ids = world.write_storage::<RobotId>();
+    let mut trajectories = world.write_storage::<TrackedDynamicTrajectory>();
+
+    use specs::Join;
+    for (RobotId(id), trajectory) in (ids.drain(), trajectories.drain()).join() {
+        trajectory_map.insert(id, trajectory.into_data());
+    }
+
+    trajectory_map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base::*;
+    use dubins::MultiDubinsPath;
+    use rand::thread_rng;
+
+    #[test]
+    fn basic_dubins_sim() {
+        let mut rng = thread_rng();
+        let origin = OrientedPosition2D::new(0., 0., PI / 2.);
+        let left = OrientedPosition2D::new(-2., -2., PI / 2.);
+        let right = OrientedPosition2D::new(2., -2., PI / 2.);
+        let back = OrientedPosition2D::new(0., -4., PI / 2.);
+        let multi = MultiDubinsPath::generate(1., 2., 15., &mut rng, origin, 10.)
+            .expect("could not generate");
+        let specs = vec![
+            NonHolonomicRobotSpec {
+                id: "leader".to_string(),
+                control: DesaiControl::Prescribed { path: multi },
+                initial_configuration: origin,
+            },
+            NonHolonomicRobotSpec {
+                id: "left".to_string(),
+                control: DesaiControl::LPsi {
+                    leader: "leader".to_string(),
+                },
+                initial_configuration: left,
+            },
+            NonHolonomicRobotSpec {
+                id: "right".to_string(),
+                control: DesaiControl::LPsi {
+                    leader: "leader".to_string(),
+                },
+                initial_configuration: right,
+            },
+            NonHolonomicRobotSpec {
+                id: "back".to_string(),
+                control: DesaiControl::LL {
+                    leaders: ("left".to_string(), "right".to_string()),
+                },
+                initial_configuration: back,
+            },
+        ];
+
+        let results = do_simulation(specs);
+        println!("Simulation results: {:?}", results);
     }
 }
