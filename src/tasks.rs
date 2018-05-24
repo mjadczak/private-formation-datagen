@@ -678,13 +678,14 @@ impl FormationGenerator<Metres2D> for Simple2DFormationGenerator {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct GenericScenarioSpec {
     pub name: String,
     pub working_dir: String,
     pub slug: Option<String>,
     // todo maybe observer?
     pub resolution: f64,
+    pub sim_resolution: f64,
     pub length: f64,
     pub turning_radius: Metres,
     pub speed: MetresPerSecond,
@@ -695,10 +696,16 @@ pub struct GenericScenarioSpec {
     pub arena_size: Metres,
 }
 
+impl GenericScenarioSpec {
+    pub fn execute(self) -> Result<PathBuf> {
+       GenericScenarioExecutionContext::new().execute(self)
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct DesaiRobotSpec {
     id: String,
-    initial_position: OrientedPosition2D,
+    initial_configuration: OrientedPosition2D,
     control: DesaiControlSpec,
 }
 
@@ -709,8 +716,8 @@ impl DesaiRobotSpec {
     {
         NonHolonomicRobotSpec {
             id: self.id.clone(),
-            initial_configuration: self.initial_position,
-            control: self.control.to_control(generator, self.initial_position),
+            initial_configuration: self.initial_configuration,
+            control: self.control.to_control(generator, self.initial_configuration),
         }
     }
 }
@@ -871,7 +878,7 @@ impl GenericScenarioExecutionContext {
                     .map(|c| c.to_real_spec(&mut traj_generator))
                     .collect();
 
-                let mut results = simulation_2d::do_simulation(robots);
+                let mut results = simulation_2d::do_desai_simulation(robots, spec.sim_resolution, spec.resolution);
                 let times: Vec<f64> = results
                     .iter()
                     .take(1)

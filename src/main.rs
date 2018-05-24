@@ -41,6 +41,7 @@ use std::io;
 use std::io::Read;
 use std::path::Path;
 use tf_record::ResultsWriter;
+use std::path::PathBuf;
 
 fn main() {
     pretty_env_logger::init();
@@ -285,6 +286,12 @@ fn main() {
                         .short("p")
                         .long("print_file")
                         .help("Prints the full path of the YAML dginfo file which was generated"),
+                )
+                .arg(
+                    Arg::with_name("generic")
+                        .short("g")
+                        .long("generic")
+                        .help("Uses the generic task spec for the YAML file"),
                 ),
         )
         .get_matches();
@@ -360,7 +367,8 @@ fn main() {
         ("task", Some(m)) => {
             let file = m.value_of("file");
             let print = m.is_present("print_file");
-            match exec_task(file, print) {
+            let generic = m.is_present("generic");
+            match exec_task(file, print, generic) {
                 Ok(()) => return,
                 Err(err) => {
                     eprintln!("An error has occurred: {}", err);
@@ -749,16 +757,24 @@ fn test_traj_gen() {
     writer.flush().unwrap();
 }
 
-fn exec_task(file: Option<&str>, print_file: bool) -> Result<(), failure::Error> {
+fn exec_task(file: Option<&str>, print_file: bool, generic: bool) -> Result<(), failure::Error> {
     let mut contents = String::new();
     if let Some(filename) = file {
         File::open(filename)?.read_to_string(&mut contents)?;
     } else {
         io::stdin().read_to_string(&mut contents)?;
     }
-    let task: tasks::ScenarioSpec = serde_yaml::from_str(&contents)?;
-    debug!("Processing task definition: {:?}", task);
-    let path = task.execute()?;
+    let path: PathBuf;
+    if generic {
+        let task: tasks::GenericScenarioSpec = serde_yaml::from_str(&contents)?;
+        debug!("Processing task definition: {:?}", task);
+        path = task.execute()?;
+    } else {
+        let task: tasks::ScenarioSpec = serde_yaml::from_str(&contents)?;
+        debug!("Processing task definition: {:?}", task);
+        path = task.execute()?;
+    }
+
     if print_file {
         let path_str = path
             .to_str()

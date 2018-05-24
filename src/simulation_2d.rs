@@ -411,12 +411,12 @@ pub enum DesaiControl {
     LL { leaders: (String, String) },
 }
 
-pub fn do_simulation(
+pub fn do_desai_simulation(
     robots: Vec<NonHolonomicRobotSpec>,
+    sim_resolution: f64,
+    track_resolution: f64,
 ) -> HashMap<String, UniformDynamicTrajectory> {
     let mut world = World::new();
-    let sim_resolution = 1. / 64.;
-    let track_resolution = 1. / 8.;
     world.add_resource(GlobalUniformTime::new(sim_resolution));
     let sim_time = 10.;
     let num_robots = robots.len();
@@ -576,7 +576,7 @@ mod tests {
             },
         ];
 
-        let results = do_simulation(specs);
+        let results = do_desai_simulation(specs, 1. / 64., 1. / 8.);
         println!("Simulation results: {:?}", results);
     }
 }

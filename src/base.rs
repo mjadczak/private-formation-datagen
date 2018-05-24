@@ -180,8 +180,10 @@ impl Metres2D {
 
 #[derive(Debug, Copy, Clone, Default, Deserialize, Serialize)]
 pub struct OrientedPosition2D {
+    #[serde(flatten)]
     pub position: Metres2D,
     /// Anticlockwise rotation
+    #[serde(rename = "r")]
     pub rotation: Radians,
 }
 
