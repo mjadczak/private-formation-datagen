@@ -35,13 +35,15 @@ pub mod trajectory;
 use base::*;
 use clap::{App, Arg, SubCommand};
 use num::Zero;
+use rand::thread_rng;
 use simulation::{Simulation, SimulationResult};
+use std::f64::consts::PI;
 use std::fs::File;
 use std::io;
 use std::io::Read;
 use std::path::Path;
-use tf_record::ResultsWriter;
 use std::path::PathBuf;
+use tf_record::ResultsWriter;
 
 fn main() {
     pretty_env_logger::init();
@@ -171,6 +173,64 @@ fn main() {
                         .takes_value(true)
                         .help("How many trajectories to generate")
                         .required(true),
+                )
+                .arg(
+                    Arg::with_name("output_dir")
+                        .short("o")
+                        .long("output-dir")
+                        .takes_value(true)
+                        .help("Output directory to place generated trajectories in")
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("gen-dubins")
+                .about("Generates Dubins trajectory data")
+                .arg(
+                    Arg::with_name("num")
+                        .short("n")
+                        .long("num-trajectories")
+                        .takes_value(true)
+                        .help("How many trajectories to generate")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("length")
+                        .short("l")
+                        .long("length")
+                        .takes_value(true)
+                        .help("Sets the (minimum) length of the generated trajectory, in seconds"),
+                )
+                .arg(
+                    Arg::with_name("arena_size")
+                        .short("a")
+                        .long("arena-size")
+                        .takes_value(true)
+                        .help("Sets size of the arena")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("speed")
+                        .short("s")
+                        .long("speed")
+                        .takes_value(true)
+                        .help("Sets speed of the vehicle")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("turning_radius")
+                        .short("t")
+                        .long("turning-radius")
+                        .takes_value(true)
+                        .help("Turning radius of the vehicle")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("resolution")
+                        .short("r")
+                        .long("resolution")
+                        .takes_value(true)
+                        .help("Resolution at which the trajectory is produced"),
                 )
                 .arg(
                     Arg::with_name("output_dir")
@@ -376,8 +436,88 @@ fn main() {
                 }
             }
         }
+        ("gen-dubins", Some(m)) => {
+            let length = m
+                .value_of("length")
+                .map_or(10., |s| s.parse::<f64>().unwrap());
+            let out = m.value_of("output_dir").unwrap();
+            let num = m.value_of("num").unwrap().parse::<usize>().unwrap();
+            let arena_size = m.value_of("arena_size").unwrap().parse::<f64>().unwrap();
+            let speed = m.value_of("speed").unwrap().parse::<f64>().unwrap();
+            let turning_radius = m
+                .value_of("turning_radius")
+                .unwrap()
+                .parse::<f64>()
+                .unwrap();
+            let resolution = m
+                .value_of("resolution")
+                .map_or(1. / 8., |s| s.parse::<f64>().unwrap());
+
+            dubins_gen(
+                length,
+                num,
+                arena_size,
+                speed,
+                turning_radius,
+                resolution,
+                out,
+            );
+        }
         _ => eprintln!("Command needs to be specified. Use `--help` to view usage."),
     }
+}
+
+fn dubins_gen(
+    length: f64,
+    num: usize,
+    arena_size: f64,
+    speed: f64,
+    turning_radius: f64,
+    resolution: f64,
+    out: &str,
+) {
+    let num_len = num.to_string().len();
+    let out_dir_path = Path::new(out);
+    std::fs::create_dir_all(out_dir_path).unwrap();
+    let mut rng = thread_rng();
+
+    for i in 0..num {
+        print!(
+            "\rWorking... [{:0width$}/{:0width$}]",
+            i + 1,
+            num,
+            width = num_len
+        );
+        let trajectory = dubins::MultiDubinsPath::generate(
+            turning_radius,
+            speed,
+            length,
+            &mut rng,
+            OrientedPosition2D::new(0., 0., PI / 2.),
+            arena_size,
+        ).unwrap();
+        let data = trajectory.to_dynamic_trajectory(resolution);
+
+        let file_name = format!("dtraj_{:0width$}.csv", i, width = num_len);
+        let mut writer = csv::Writer::from_path(out_dir_path.join(&file_name)).unwrap();
+        writer
+            .write_record(&["t", "x", "y", "r", "v", "w"])
+            .unwrap();
+        for (t, (pos, r), (v, w)) in data {
+            writer
+                .write_record(&[
+                    t.to_string(),
+                    pos.x.to_string(),
+                    pos.y.to_string(),
+                    r.to_string(),
+                    v.to_string(),
+                    w.to_string(),
+                ])
+                .unwrap();
+        }
+        writer.flush().unwrap();
+    }
+    println!("\nDone!");
 }
 
 fn traj_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {

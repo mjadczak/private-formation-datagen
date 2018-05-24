@@ -698,7 +698,7 @@ pub struct GenericScenarioSpec {
 
 impl GenericScenarioSpec {
     pub fn execute(self) -> Result<PathBuf> {
-       GenericScenarioExecutionContext::new().execute(self)
+        GenericScenarioExecutionContext::new().execute(self)
     }
 }
 
@@ -717,7 +717,9 @@ impl DesaiRobotSpec {
         NonHolonomicRobotSpec {
             id: self.id.clone(),
             initial_configuration: self.initial_configuration,
-            control: self.control.to_control(generator, self.initial_configuration),
+            control: self
+                .control
+                .to_control(generator, self.initial_configuration),
         }
     }
 }
@@ -878,7 +880,11 @@ impl GenericScenarioExecutionContext {
                     .map(|c| c.to_real_spec(&mut traj_generator))
                     .collect();
 
-                let mut results = simulation_2d::do_desai_simulation(robots, spec.sim_resolution, spec.resolution);
+                let mut results = simulation_2d::do_desai_simulation(
+                    robots,
+                    spec.sim_resolution,
+                    spec.resolution,
+                );
                 let times: Vec<f64> = results
                     .iter()
                     .take(1)
