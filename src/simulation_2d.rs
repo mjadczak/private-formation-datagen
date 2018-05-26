@@ -23,7 +23,7 @@ impl MathExt for f64 {
     }
 }
 
-const D: Metres = 0.5;
+const D: Metres = 0.1;
 const A1: f64 = 0.25;
 const A2: f64 = 0.25;
 
