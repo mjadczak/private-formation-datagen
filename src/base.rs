@@ -1,5 +1,6 @@
 use num::Zero;
 use std::ops::*;
+use core::fmt::Debug;
 
 pub trait Vector:
     PartialEq
@@ -15,6 +16,7 @@ pub trait Vector:
     + Sized
     + Copy
     + Zero
+    + Debug
 {
     fn length(&self) -> f64;
 

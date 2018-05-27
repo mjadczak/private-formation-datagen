@@ -5,6 +5,8 @@ use rand::rngs::SmallRng;
 use rand::{FromEntropy, Rng};
 use trajectory::NaiveTrajectory;
 
+const LIMIT_FACTOR: f64 = 2.;
+
 pub trait Controller<S: Vector>: Clone {
     fn target(&self) -> S;
     fn set_target(&mut self, target: S);
@@ -90,7 +92,7 @@ pub struct PController {
 impl PController {
     pub fn new(params: PControllerParams) -> Self {
         let mut controller = PIDControllerImpl::new(params.p_gain, 0., 0.);
-        controller.set_limits(params.vel_limits.0, params.vel_limits.1);
+        controller.set_limits(LIMIT_FACTOR * params.vel_limits.0, LIMIT_FACTOR * params.vel_limits.1);
         PController { params, controller }
     }
 
@@ -141,7 +143,7 @@ pub struct PIDController {
 impl PIDController {
     pub fn new(params: PIDControllerParams) -> Self {
         let mut controller = PIDControllerImpl::new(params.p_gain, params.i_gain, params.d_gain);
-        controller.set_limits(params.vel_limits.0, params.vel_limits.1);
+        controller.set_limits(LIMIT_FACTOR * params.vel_limits.0, LIMIT_FACTOR * params.vel_limits.1);
         PIDController { params, controller }
     }
 
@@ -175,8 +177,8 @@ impl UniformPIDController2D {
     pub fn new(params: PIDControllerParams) -> Self {
         let mut controller_x = PIDControllerImpl::new(params.p_gain, params.i_gain, params.d_gain);
         let mut controller_y = PIDControllerImpl::new(params.p_gain, params.i_gain, params.d_gain);
-        controller_x.set_limits(params.vel_limits.0, params.vel_limits.1);
-        controller_y.set_limits(params.vel_limits.0, params.vel_limits.1);
+        controller_x.set_limits(LIMIT_FACTOR * params.vel_limits.0, LIMIT_FACTOR * params.vel_limits.1);
+        controller_y.set_limits(LIMIT_FACTOR * params.vel_limits.0, LIMIT_FACTOR * params.vel_limits.1);
         UniformPIDController2D {
             controller_x,
             controller_y,
@@ -534,7 +536,14 @@ where
                 LeaderTrajectoryMode::Predefined => self.num_robots - 1,
                 LeaderTrajectoryMode::Follow => self.num_robots,
             } as f64;
-            total_error_sqd / num_active_robots
+            let err = total_error_sqd / num_active_robots;
+
+            if err.is_nan() {
+                // error is so bad we wrapped around
+                ::std::f64::MAX
+            } else {
+                err
+            }
         };
 
         SimpleSimulationResult(time_step, self.results, Some(path_error))

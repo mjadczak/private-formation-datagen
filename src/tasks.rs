@@ -442,7 +442,14 @@ impl ScenarioExecutionContext {
         if total_path_error > 0. {
             let total_trajectories =
                 (num_sets * spec.reference_trajectories.num_per_set * spec.robot.num_robots) as f64;
-            let avg_path_error = total_path_error / total_trajectories;
+            let avg_path_error = {
+                let err = total_path_error / total_trajectories;
+                if err.is_infinite() {
+                    1.0e20
+                } else {
+                    err
+                }
+            };
             self.description.features.insert(
                 "avg_path_error".to_string(),
                 ConstantParam::Float(avg_path_error),

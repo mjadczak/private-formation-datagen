@@ -23,6 +23,7 @@ extern crate slugify;
 extern crate specs;
 #[macro_use]
 extern crate specs_derive;
+extern crate core;
 
 pub mod base;
 pub mod dubins;
