@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use tf_record;
 use time;
 use trajectory;
+use csv;
 
 type Result<R> = ::std::result::Result<R, Error>;
 type Params = HashMap<String, ConstantParam>;
@@ -701,6 +702,9 @@ pub struct GenericScenarioSpec {
     pub configurations: Vec<Vec<DesaiRobotSpec>>,
     pub origin: Metres2D,
     pub arena_size: Metres,
+    #[serde(default)]
+    pub output_csv: bool,
+    pub speed_limit_factor: Option<f64>,
 }
 
 impl GenericScenarioSpec {
@@ -806,6 +810,11 @@ impl GenericScenarioExecutionContext {
         self.info_file_path = self.working_dir.join(&self.slug);
         self.info_file_path.set_extension("gdginfo.yaml");
         self.data_dir = self.working_dir.join(self.slug.clone() + "-data");
+        let csv_dir = self.data_dir.join("csv");
+        if spec.output_csv {
+            std::fs::create_dir_all(&csv_dir)?;
+        }
+        let max_speed = spec.speed_limit_factor.map(|f| f * spec.speed);
 
         debug!(
             "Working dir is {:?}, data dir is {:?}",
@@ -849,6 +858,7 @@ impl GenericScenarioExecutionContext {
         };
 
         let config_num_width = spec.configurations.len().to_string().len();
+        let per_config_width = spec.num_per_configuration.to_string().len();
 
         for (config_num, configuration) in spec.configurations.into_iter().enumerate() {
             let leader_ids: Vec<i64> = configuration
@@ -865,12 +875,13 @@ impl GenericScenarioExecutionContext {
                 .collect();
             debug!("Processing configuration number {}", config_num);
             let mut file_description: GenericDataFileDescription = Default::default();
-            let file_name = format!(
-                "data{:0width$}.tfrecord",
+            let file_slug = format!(
+                "data{:0width$}",
                 config_num,
                 width = config_num_width
             );
-            let file_path = self.data_dir.join(&file_name);
+            let tf_file_name = file_slug.clone() + ".tfrecord";
+            let file_path = self.data_dir.join(&tf_file_name);
             file_description.file = file_path
                 .strip_prefix(&self.working_dir)?
                 .to_str()
@@ -891,12 +902,8 @@ impl GenericScenarioExecutionContext {
                     robots,
                     spec.sim_resolution,
                     spec.resolution,
+                    max_speed,
                 );
-                let times: Vec<f64> = results
-                    .iter()
-                    .take(1)
-                    .flat_map(|(_key, data)| data.iter().map(|(time, _pos)| *time))
-                    .collect();
 
                 let per_robot_data: Vec<Vec<(Seconds, NonHolonomicDynamics)>> = self
                     .description
@@ -904,6 +911,41 @@ impl GenericScenarioExecutionContext {
                     .iter()
                     .map(|name| results.remove(name).unwrap())
                     .collect();
+
+                if spec.output_csv {
+                    let csv_file_name = format!("{}_{:0width$}.csv", file_slug, idx, width = per_config_width);
+                    let csv_file_path = csv_dir.join(csv_file_name);
+                    let mut writer = csv::Writer::from_path(csv_file_path)?;
+
+                    let mut iterators: Vec<_> = per_robot_data.iter().map(|r_data| r_data.iter()).collect();
+                    let mut temp_record: Vec<String> = Vec::with_capacity(1 + self.description.num_robots * 3);
+                    // write header
+                    temp_record.push("t".to_string());
+                    for robot_id in 0..self.description.num_robots {
+                        temp_record.push(format!("r{}_x", robot_id));
+                        temp_record.push(format!("r{}_y", robot_id));
+                        temp_record.push(format!("r{}_r", robot_id));
+                    }
+                    writer.write_record(&temp_record)?;
+                    temp_record.clear();
+                    'record: loop {
+                        for (robot_id, robot_data_iter) in iterators.iter_mut().enumerate() {
+                            let maybe_data = robot_data_iter.next();
+                            if let Some(&(t, ref dynamics)) = maybe_data {
+                                if robot_id == 0 {
+                                    temp_record.push(t.to_string());
+                                }
+                                temp_record.push(dynamics.position.x.to_string());
+                                temp_record.push(dynamics.position.y.to_string());
+                                temp_record.push(dynamics.heading.to_string());
+                            } else {
+                                break 'record; //end of iter
+                            }
+                        }
+                        writer.write_record(&temp_record)?;
+                        temp_record.clear();
+                    }
+                }
 
                 let mut features: HashMap<String, tf_record::TfFeature> = HashMap::with_capacity(1);
                 features.insert(

@@ -24,8 +24,8 @@ impl MathExt for f64 {
 }
 
 const D: Metres = 0.1;
-const A1: f64 = 0.25;
-const A2: f64 = 0.25;
+const A1: f64 = 1.;
+const A2: f64 = 1.;
 
 type UniformDynamicTrajectory = Vec<(Seconds, NonHolonomicDynamics)>;
 
@@ -308,7 +308,9 @@ impl<'a> System<'a> for TrackTrajectories {
     }
 }
 
-struct ApplyNonHolonomicDynamics;
+struct ApplyNonHolonomicDynamics {
+    pub max_speed: Option<MetresPerSecond>
+}
 
 impl<'a> System<'a> for ApplyNonHolonomicDynamics {
     type SystemData = (
@@ -322,7 +324,9 @@ impl<'a> System<'a> for ApplyNonHolonomicDynamics {
 
         // followers
         for (dynamic, ()) in (&mut dynamics, !&prescribed).join() {
-            // todo maybe clamp speed
+            if let Some(speed) = self.max_speed {
+                dynamic.speed = dynamic.speed.max(-speed).min(speed);
+            }
             dynamic.update(time.sim_delta());
         }
 
@@ -415,6 +419,7 @@ pub fn do_desai_simulation(
     robots: Vec<NonHolonomicRobotSpec>,
     sim_resolution: f64,
     track_resolution: f64,
+    max_speed: Option<MetresPerSecond>,
 ) -> HashMap<String, UniformDynamicTrajectory> {
     let mut world = World::new();
     world.add_resource(GlobalUniformTime::new(sim_resolution));
@@ -422,7 +427,7 @@ pub fn do_desai_simulation(
     let num_robots = robots.len();
 
     let mut dispatcher = DispatcherBuilder::new()
-        .with(ApplyNonHolonomicDynamics, "apply_dynamics", &[])
+        .with(ApplyNonHolonomicDynamics {max_speed}, "apply_dynamics", &[])
         .with(ApplyControl::new(), "apply_control", &["apply_dynamics"])
         .with(
             TrackTrajectories,
