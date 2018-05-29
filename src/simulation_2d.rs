@@ -156,6 +156,14 @@ impl LPsiControl {
             psi_12_d,
         }
     }
+
+    pub fn from_parameters(
+        leader: Entity,
+        l_12_d: Metres,
+        psi_12_d: Metres,
+    ) -> Self {
+        LPsiControl {leader, l_12_d, psi_12_d}
+    }
 }
 
 #[derive(Debug, Component)]
@@ -203,6 +211,27 @@ impl LLControl {
         let speed = (A1 * (l_13_d - l_13) + leader1.speed * psi_13.cos()
             - D * angular_velocity * gamma_1.sin()) / gamma_1.cos();
         (speed, angular_velocity)
+    }
+}
+
+#[derive(Debug, Component)]
+struct VLPrescribedControl {
+    path: PrescribedControl,
+    control: LPsiControl,
+}
+
+impl VLPrescribedControl {
+    // me is a dummy so doesn't actually matter
+    pub fn new(path: MultiDubinsPath, me: Entity) -> Self {
+        VLPrescribedControl {
+            path: PrescribedControl::new(path),
+            control: LPsiControl::from_parameters(me, -D, 0.),
+        }
+    }
+
+    pub fn calculate_control(&self, follower: &NonHolonomicDynamics, t: Seconds, resolution: Seconds) -> (MetresPerSecond, RadiansPerSecond) {
+        let leader_dynamics = self.path.sample(t, resolution);
+        self.control.calculate_control(follower, &leader_dynamics)
     }
 }
 
@@ -370,11 +399,12 @@ impl<'a> System<'a> for ApplyControl {
         WriteStorage<'a, NonHolonomicDynamics>,
         ReadStorage<'a, LPsiControl>,
         ReadStorage<'a, LLControl>,
+        ReadStorage<'a, VLPrescribedControl>,
         Read<'a, GlobalUniformTime>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, mut dynamics, lpsi, ll, time) = data;
+        let (entities, mut dynamics, lpsi, ll, vlp, time) = data;
         use specs::Join;
 
         for (follower_entity, follower, control) in (&*entities, &dynamics, &lpsi).join() {
@@ -389,6 +419,11 @@ impl<'a> System<'a> for ApplyControl {
             let leader2 = dynamics.get(le2).unwrap();
             let new_dynamics =
                 DynamicsChange::new(control.calculate_control(follower, (leader1, leader2)));
+            self.new_dynamics.add(follower_entity, new_dynamics);
+        }
+
+        for (follower_entity, follower, control) in (&*entities, &dynamics, &vlp).join() {
+            let new_dynamics = DynamicsChange::new(control.calculate_control(follower, time.sim_time(), time.sim_delta()));
             self.new_dynamics.add(follower_entity, new_dynamics);
         }
 
@@ -411,6 +446,7 @@ pub struct NonHolonomicRobotSpec {
 
 pub enum DesaiControl {
     Prescribed { path: MultiDubinsPath },
+    VLPrescribed { path: MultiDubinsPath },
     LPsi { leader: String },
     LL { leaders: (String, String) },
 }
@@ -475,6 +511,13 @@ pub fn do_desai_simulation(
                     .write_storage::<PrescribedControl>()
                     .insert(entity, control)
                     .expect("Prescribed control already present");
+            },
+            DesaiControl::VLPrescribed { path } => {
+                let control = VLPrescribedControl::new(path, entity);
+                world
+                    .write_storage::<VLPrescribedControl>()
+                    .insert(entity, control)
+                    .expect("VLPrescribed control already present");
             }
             DesaiControl::LPsi { leader } => {
                 // todo possibly make the whole function return a Result in case e.g. ids are incorrect

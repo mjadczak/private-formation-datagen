@@ -739,6 +739,7 @@ impl DesaiRobotSpec {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum DesaiControlSpec {
     Leader,
+    VLeader,
     LPsi { leader: String },
     LL { leaders: (String, String) },
 }
@@ -762,6 +763,9 @@ impl DesaiControlSpec {
             DesaiControlSpec::Leader => DesaiControl::Prescribed {
                 path: generator(initial_position),
             },
+            DesaiControlSpec::VLeader => DesaiControl::VLPrescribed {
+                path: generator(initial_position),
+            }
         }
     }
 }
@@ -864,7 +868,7 @@ impl GenericScenarioExecutionContext {
             let leader_ids: Vec<i64> = configuration
                 .iter()
                 .filter_map(|c| match c.control {
-                    DesaiControlSpec::Leader => Some(self
+                    DesaiControlSpec::Leader | DesaiControlSpec::VLeader => Some(self
                         .description
                         .robot_ids
                         .iter()
