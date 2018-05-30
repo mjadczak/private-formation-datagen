@@ -135,7 +135,7 @@ impl ConvertibleToOrientedPosition2D for Configuration {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DubinsPath {
     inner: Cell<bindings::DubinsPath>,
     end: OrientedPosition2D,
@@ -277,7 +277,7 @@ impl DubinsPath {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MultiDubinsPath {
     subpaths: Vec<DubinsPath>,
     speed: MetresPerSecond,

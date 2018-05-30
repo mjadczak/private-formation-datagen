@@ -1,6 +1,6 @@
+use core::fmt::Debug;
 use num::Zero;
 use std::ops::*;
-use core::fmt::Debug;
 
 pub trait Vector:
     PartialEq

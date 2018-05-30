@@ -157,12 +157,12 @@ impl LPsiControl {
         }
     }
 
-    pub fn from_parameters(
-        leader: Entity,
-        l_12_d: Metres,
-        psi_12_d: Metres,
-    ) -> Self {
-        LPsiControl {leader, l_12_d, psi_12_d}
+    pub fn from_parameters(leader: Entity, l_12_d: Metres, psi_12_d: Metres) -> Self {
+        LPsiControl {
+            leader,
+            l_12_d,
+            psi_12_d,
+        }
     }
 }
 
@@ -229,7 +229,12 @@ impl VLPrescribedControl {
         }
     }
 
-    pub fn calculate_control(&self, follower: &NonHolonomicDynamics, t: Seconds, resolution: Seconds) -> (MetresPerSecond, RadiansPerSecond) {
+    pub fn calculate_control(
+        &self,
+        follower: &NonHolonomicDynamics,
+        t: Seconds,
+        resolution: Seconds,
+    ) -> (MetresPerSecond, RadiansPerSecond) {
         let leader_dynamics = self.path.sample(t, resolution);
         self.control.calculate_control(follower, &leader_dynamics)
     }
@@ -338,7 +343,7 @@ impl<'a> System<'a> for TrackTrajectories {
 }
 
 struct ApplyNonHolonomicDynamics {
-    pub max_speed: Option<MetresPerSecond>
+    pub max_speed: Option<MetresPerSecond>,
 }
 
 impl<'a> System<'a> for ApplyNonHolonomicDynamics {
@@ -423,7 +428,11 @@ impl<'a> System<'a> for ApplyControl {
         }
 
         for (follower_entity, follower, control) in (&*entities, &dynamics, &vlp).join() {
-            let new_dynamics = DynamicsChange::new(control.calculate_control(follower, time.sim_time(), time.sim_delta()));
+            let new_dynamics = DynamicsChange::new(control.calculate_control(
+                follower,
+                time.sim_time(),
+                time.sim_delta(),
+            ));
             self.new_dynamics.add(follower_entity, new_dynamics);
         }
 
@@ -435,6 +444,75 @@ impl<'a> System<'a> for ApplyControl {
         }
 
         self.new_dynamics.clear();
+    }
+}
+
+#[derive(Debug, Component)]
+struct TrackedPathError {
+    desired_offset: Metres2D,
+    total_err_sq: Metres,
+    ticks: usize,
+}
+
+impl TrackedPathError {
+    pub fn new(desired_offset: Metres2D) -> Self {
+        TrackedPathError {
+            desired_offset,
+            total_err_sq: 0.,
+            ticks: 0,
+        }
+    }
+
+    pub fn average_err_sq(&self) -> Metres {
+        self.total_err_sq / (self.ticks as f64)
+    }
+
+    pub fn track(&mut self, offset: Metres2D) {
+        let err_sq = (self.desired_offset - offset).length().powi(2);
+        self.total_err_sq += err_sq;
+        self.ticks += 1;
+    }
+}
+
+#[derive(Debug)]
+struct CalculatePathError {
+    leader_path: MultiDubinsPath,
+    path_length: Seconds,
+}
+
+impl CalculatePathError {
+    pub fn new(leader_path: MultiDubinsPath) -> Self {
+        CalculatePathError {
+            path_length: leader_path.length(),
+            leader_path,
+        }
+    }
+}
+
+impl<'a> System<'a> for CalculatePathError {
+    type SystemData = (
+        WriteStorage<'a, TrackedPathError>,
+        ReadStorage<'a, NonHolonomicDynamics>,
+        Read<'a, GlobalUniformTime>,
+    );
+
+    fn run(&mut self, data: <Self as System>::SystemData) {
+        let (mut path_errors, dynamics, time) = data;
+        let t = time.sim_time();
+        let traj_pos = {
+            if t > self.path_length {
+                let (pos, _) = self.leader_path.endpoint();
+                pos
+            } else {
+                let (pos, _) = self.leader_path.sample(t).expect("calc path err t sample");
+                pos
+            }
+        };
+
+        for (path_err, dynamic) in (&mut path_errors, &dynamics).join() {
+            let offset = traj_pos - dynamic.position;
+            path_err.track(offset);
+        }
     }
 }
 
@@ -456,18 +534,42 @@ pub fn do_desai_simulation(
     sim_resolution: f64,
     track_resolution: f64,
     max_speed: Option<MetresPerSecond>,
-) -> HashMap<String, UniformDynamicTrajectory> {
+) -> (HashMap<String, UniformDynamicTrajectory>, Metres) {
     let mut world = World::new();
     world.add_resource(GlobalUniformTime::new(sim_resolution));
     let sim_time = 10.;
     let num_robots = robots.len();
 
+    // grab a copy of the leader path
+
+    let (leader_path, initial_leader_pos) = {
+        robots
+            .iter()
+            .filter_map(|spec| match spec.control {
+                DesaiControl::Prescribed { ref path } | DesaiControl::VLPrescribed { ref path } => {
+                    Some((path.clone(), spec.initial_configuration.position))
+                }
+                _ => None,
+            })
+            .next()
+            .expect("expected leader path")
+    };
+
     let mut dispatcher = DispatcherBuilder::new()
-        .with(ApplyNonHolonomicDynamics {max_speed}, "apply_dynamics", &[])
+        .with(
+            ApplyNonHolonomicDynamics { max_speed },
+            "apply_dynamics",
+            &[],
+        )
         .with(ApplyControl::new(), "apply_control", &["apply_dynamics"])
         .with(
             TrackTrajectories,
             "track_trajectories",
+            &["apply_dynamics", "apply_control"],
+        )
+        .with(
+            CalculatePathError::new(leader_path),
+            "calculate_path_error",
             &["apply_dynamics", "apply_control"],
         )
         .build();
@@ -490,11 +592,13 @@ pub fn do_desai_simulation(
                 let time = world.read_resource::<GlobalUniformTime>();
                 TrackedDynamicTrajectory::new(&*time, track_resolution)
             };
+            let leader_offset = initial_leader_pos - dynamics.position;
             let entity = world
                 .create_entity()
                 .with(dynamics)
                 .with(tracking)
                 .with(RobotId(robot.id.clone()))
+                .with(TrackedPathError::new(leader_offset))
                 .build();
             (robot.id.clone(), entity)
         })
@@ -511,7 +615,7 @@ pub fn do_desai_simulation(
                     .write_storage::<PrescribedControl>()
                     .insert(entity, control)
                     .expect("Prescribed control already present");
-            },
+            }
             DesaiControl::VLPrescribed { path } => {
                 let control = VLPrescribedControl::new(path, entity);
                 world
@@ -576,7 +680,19 @@ pub fn do_desai_simulation(
         trajectory_map.insert(id, trajectory.into_data());
     }
 
-    trajectory_map
+    // path error
+    let avg_path_error_sq = {
+        let mut total_err_sq = 0.;
+        let mut num = 0;
+        let mut p_errs = world.write_storage::<TrackedPathError>();
+        for perr in p_errs.drain().join() {
+            total_err_sq += perr.average_err_sq();
+            num += 1;
+        }
+        total_err_sq / (num as f64)
+    };
+    debug!("AVERAGE path error: {}", avg_path_error_sq);
+    (trajectory_map, avg_path_error_sq)
 }
 
 #[cfg(test)]
@@ -624,7 +740,7 @@ mod tests {
             },
         ];
 
-        let results = do_desai_simulation(specs, 1. / 64., 1. / 8.);
+        let (results, _) = do_desai_simulation(specs, 1. / 64., 1. / 8., None);
         println!("Simulation results: {:?}", results);
     }
 }

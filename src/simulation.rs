@@ -92,7 +92,10 @@ pub struct PController {
 impl PController {
     pub fn new(params: PControllerParams) -> Self {
         let mut controller = PIDControllerImpl::new(params.p_gain, 0., 0.);
-        controller.set_limits(LIMIT_FACTOR * params.vel_limits.0, LIMIT_FACTOR * params.vel_limits.1);
+        controller.set_limits(
+            LIMIT_FACTOR * params.vel_limits.0,
+            LIMIT_FACTOR * params.vel_limits.1,
+        );
         PController { params, controller }
     }
 
@@ -143,7 +146,10 @@ pub struct PIDController {
 impl PIDController {
     pub fn new(params: PIDControllerParams) -> Self {
         let mut controller = PIDControllerImpl::new(params.p_gain, params.i_gain, params.d_gain);
-        controller.set_limits(LIMIT_FACTOR * params.vel_limits.0, LIMIT_FACTOR * params.vel_limits.1);
+        controller.set_limits(
+            LIMIT_FACTOR * params.vel_limits.0,
+            LIMIT_FACTOR * params.vel_limits.1,
+        );
         PIDController { params, controller }
     }
 
@@ -177,8 +183,14 @@ impl UniformPIDController2D {
     pub fn new(params: PIDControllerParams) -> Self {
         let mut controller_x = PIDControllerImpl::new(params.p_gain, params.i_gain, params.d_gain);
         let mut controller_y = PIDControllerImpl::new(params.p_gain, params.i_gain, params.d_gain);
-        controller_x.set_limits(LIMIT_FACTOR * params.vel_limits.0, LIMIT_FACTOR * params.vel_limits.1);
-        controller_y.set_limits(LIMIT_FACTOR * params.vel_limits.0, LIMIT_FACTOR * params.vel_limits.1);
+        controller_x.set_limits(
+            LIMIT_FACTOR * params.vel_limits.0,
+            LIMIT_FACTOR * params.vel_limits.1,
+        );
+        controller_y.set_limits(
+            LIMIT_FACTOR * params.vel_limits.0,
+            LIMIT_FACTOR * params.vel_limits.1,
+        );
         UniformPIDController2D {
             controller_x,
             controller_y,

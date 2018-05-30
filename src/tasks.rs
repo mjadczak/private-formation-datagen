@@ -1,4 +1,5 @@
 use base::*;
+use csv;
 use dubins::MultiDubinsPath;
 use failure::Error;
 use num::Zero;
@@ -20,7 +21,6 @@ use std::path::PathBuf;
 use tf_record;
 use time;
 use trajectory;
-use csv;
 
 type Result<R> = ::std::result::Result<R, Error>;
 type Params = HashMap<String, ConstantParam>;
@@ -765,7 +765,7 @@ impl DesaiControlSpec {
             },
             DesaiControlSpec::VLeader => DesaiControl::VLPrescribed {
                 path: generator(initial_position),
-            }
+            },
         }
     }
 }
@@ -831,6 +831,7 @@ impl GenericScenarioExecutionContext {
         self.description.num_robots = self.description.robot_ids.len();
         self.description.resolution = spec.resolution;
         self.description.points_per_trajectory = (spec.length / spec.resolution) as usize + 1;
+        let total_num_trajectories = spec.configurations.len() * spec.num_per_configuration;
         let mut features = Params::with_capacity(5);
         features.insert(
             "turning_radius".to_string(),
@@ -861,6 +862,8 @@ impl GenericScenarioExecutionContext {
             ).expect("could not generate leader path")
         };
 
+        let mut total_path_err_sq = 0.;
+
         let config_num_width = spec.configurations.len().to_string().len();
         let per_config_width = spec.num_per_configuration.to_string().len();
 
@@ -868,22 +871,19 @@ impl GenericScenarioExecutionContext {
             let leader_ids: Vec<i64> = configuration
                 .iter()
                 .filter_map(|c| match c.control {
-                    DesaiControlSpec::Leader | DesaiControlSpec::VLeader => Some(self
-                        .description
-                        .robot_ids
-                        .iter()
-                        .position(|id| *id == c.id)
-                        .unwrap() as i64),
+                    DesaiControlSpec::Leader | DesaiControlSpec::VLeader => Some(
+                        self.description
+                            .robot_ids
+                            .iter()
+                            .position(|id| *id == c.id)
+                            .unwrap() as i64,
+                    ),
                     _ => None,
                 })
                 .collect();
             debug!("Processing configuration number {}", config_num);
             let mut file_description: GenericDataFileDescription = Default::default();
-            let file_slug = format!(
-                "data{:0width$}",
-                config_num,
-                width = config_num_width
-            );
+            let file_slug = format!("data{:0width$}", config_num, width = config_num_width);
             let tf_file_name = file_slug.clone() + ".tfrecord";
             let file_path = self.data_dir.join(&tf_file_name);
             file_description.file = file_path
@@ -902,12 +902,14 @@ impl GenericScenarioExecutionContext {
                     .map(|c| c.to_real_spec(&mut traj_generator))
                     .collect();
 
-                let mut results = simulation_2d::do_desai_simulation(
+                let (mut results, path_err) = simulation_2d::do_desai_simulation(
                     robots,
                     spec.sim_resolution,
                     spec.resolution,
                     max_speed,
                 );
+
+                total_path_err_sq += path_err;
 
                 let per_robot_data: Vec<Vec<(Seconds, NonHolonomicDynamics)>> = self
                     .description
@@ -917,12 +919,19 @@ impl GenericScenarioExecutionContext {
                     .collect();
 
                 if spec.output_csv {
-                    let csv_file_name = format!("{}_{:0width$}.csv", file_slug, idx, width = per_config_width);
+                    let csv_file_name = format!(
+                        "{}_{:0width$}.csv",
+                        file_slug,
+                        idx,
+                        width = per_config_width
+                    );
                     let csv_file_path = csv_dir.join(csv_file_name);
                     let mut writer = csv::Writer::from_path(csv_file_path)?;
 
-                    let mut iterators: Vec<_> = per_robot_data.iter().map(|r_data| r_data.iter()).collect();
-                    let mut temp_record: Vec<String> = Vec::with_capacity(1 + self.description.num_robots * 3);
+                    let mut iterators: Vec<_> =
+                        per_robot_data.iter().map(|r_data| r_data.iter()).collect();
+                    let mut temp_record: Vec<String> =
+                        Vec::with_capacity(1 + self.description.num_robots * 3);
                     // write header
                     temp_record.push("t".to_string());
                     for robot_id in 0..self.description.num_robots {
@@ -963,6 +972,9 @@ impl GenericScenarioExecutionContext {
             self.description.files.push(file_description);
             writer.finish()?;
         }
+
+        let avg_path_err = total_path_err_sq / (total_num_trajectories as f64);
+        self.description.features.insert("avg_path_err_sq".to_string(), ConstantParam::Float(avg_path_err));
 
         let mut info_file = File::create(&self.info_file_path)?;
         write!(&mut info_file, "# datagen-generic-info v2.2\n")?;
