@@ -24,6 +24,7 @@ extern crate specs;
 #[macro_use]
 extern crate specs_derive;
 extern crate core;
+extern crate nalgebra;
 
 pub mod base;
 pub mod dubins;

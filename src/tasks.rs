@@ -11,7 +11,7 @@ use serde_yaml;
 use simulation;
 use simulation::Simulation;
 use simulation::SimulationResult;
-use simulation_2d::{self, DesaiControl, NonHolonomicDynamics, NonHolonomicRobotSpec};
+use simulation_2d::{self, DesaiControl, ShenControl, NonHolonomicDynamics, NonHolonomicRobotSpec, RobotControl};
 use slugify::slugify;
 use std;
 use std::collections::HashMap;
@@ -699,6 +699,8 @@ pub struct GenericScenarioSpec {
     pub speed: MetresPerSecond,
     pub robot_ids: Vec<String>,
     pub num_per_configuration: usize,
+    #[serde(default)]
+    pub spec_type: ControlSpecType,
     pub configurations: Vec<Vec<DesaiRobotSpec>>,
     pub origin: Metres2D,
     pub arena_size: Metres,
@@ -721,7 +723,7 @@ pub struct DesaiRobotSpec {
 }
 
 impl DesaiRobotSpec {
-    pub fn to_real_spec<F>(&self, generator: &mut F) -> NonHolonomicRobotSpec
+    pub fn to_real_spec<F>(&self, generator: &mut F, spec_type: ControlSpecType) -> NonHolonomicRobotSpec
     where
         F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
     {
@@ -730,8 +732,21 @@ impl DesaiRobotSpec {
             initial_configuration: self.initial_configuration,
             control: self
                 .control
-                .to_control(generator, self.initial_configuration),
+                .to_control(generator, self.initial_configuration, spec_type),
         }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Copy)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ControlSpecType {
+    Desai,
+    Shen { lambda: f64, k1: f64, k2: f64, eps2: f64 }
+}
+
+impl Default for ControlSpecType {
+    fn default() -> Self {
+        ControlSpecType::Desai
     }
 }
 
@@ -749,23 +764,52 @@ impl DesaiControlSpec {
         &self,
         generator: &mut F,
         initial_position: OrientedPosition2D,
-    ) -> DesaiControl
-    where
-        F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
+        spec_type: ControlSpecType,
+    ) -> RobotControl
+        where
+            F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
     {
-        match *self {
-            DesaiControlSpec::LPsi { ref leader } => DesaiControl::LPsi {
-                leader: leader.clone(),
+        match spec_type {
+            ControlSpecType::Desai => {
+                let control = match *self {
+                    DesaiControlSpec::LPsi { ref leader } => DesaiControl::LPsi {
+                        leader: leader.clone(),
+                    },
+                    DesaiControlSpec::LL { ref leaders } => DesaiControl::LL {
+                        leaders: leaders.clone(),
+                    },
+                    DesaiControlSpec::Leader => DesaiControl::Prescribed {
+                        path: generator(initial_position),
+                    },
+                    DesaiControlSpec::VLeader => DesaiControl::VLPrescribed {
+                        path: generator(initial_position),
+                    },
+                };
+                RobotControl::Desai(control)
             },
-            DesaiControlSpec::LL { ref leaders } => DesaiControl::LL {
-                leaders: leaders.clone(),
-            },
-            DesaiControlSpec::Leader => DesaiControl::Prescribed {
-                path: generator(initial_position),
-            },
-            DesaiControlSpec::VLeader => DesaiControl::VLPrescribed {
-                path: generator(initial_position),
-            },
+            ControlSpecType::Shen { lambda, k1, k2, eps2 } => {
+                let control = match *self {
+                    DesaiControlSpec::LPsi { ref leader } => ShenControl::LPsi {
+                        leader: leader.clone(),
+                        lambda,
+                        k1,
+                        k2,
+                        eps2,
+                    },
+                    DesaiControlSpec::LL { .. } => panic!("L-L control not supported with Shen"),
+                    DesaiControlSpec::Leader => ShenControl::Prescribed {
+                        path: generator(initial_position),
+                    },
+                    DesaiControlSpec::VLeader => ShenControl::VLPrescribed {
+                        path: generator(initial_position),
+                        lambda,
+                        k1,
+                        k2,
+                        eps2,
+                    },
+                };
+                RobotControl::Shen(control)
+            }
         }
     }
 }
@@ -897,9 +941,10 @@ impl GenericScenarioExecutionContext {
             let mut writer = tf_record::GenericTfWriter::from_writer(data_file);
 
             for idx in 0..spec.num_per_configuration {
+                let spec_type = spec.spec_type;
                 let robots: Vec<NonHolonomicRobotSpec> = configuration
                     .iter()
-                    .map(|c| c.to_real_spec(&mut traj_generator))
+                    .map(|c| c.to_real_spec(&mut traj_generator, spec_type))
                     .collect();
 
                 let (mut results, path_err) = simulation_2d::do_desai_simulation(
@@ -974,7 +1019,10 @@ impl GenericScenarioExecutionContext {
         }
 
         let avg_path_err = total_path_err_sq / (total_num_trajectories as f64);
-        self.description.features.insert("avg_path_err_sq".to_string(), ConstantParam::Float(avg_path_err));
+        self.description.features.insert(
+            "avg_path_err_sq".to_string(),
+            ConstantParam::Float(avg_path_err),
+        );
 
         let mut info_file = File::create(&self.info_file_path)?;
         write!(&mut info_file, "# datagen-generic-info v2.2\n")?;
