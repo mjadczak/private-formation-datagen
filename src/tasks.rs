@@ -575,28 +575,28 @@ impl GenericFloatParam {
             ParamsSpec::Constant { ref values } => match *values
                 .get(key)
                 .ok_or(format_err!("required parameter not found"))?
-            {
-                ConstantParam::Float(val) => Ok(GenericFloatParam::Constant(val)),
-                ConstantParam::Int(val) => Ok(GenericFloatParam::Constant(val as f64)),
-            },
+                {
+                    ConstantParam::Float(val) => Ok(GenericFloatParam::Constant(val)),
+                    ConstantParam::Int(val) => Ok(GenericFloatParam::Constant(val as f64)),
+                },
             ParamsSpec::Random { ref values } => {
                 match *values
                     .get(key)
                     .ok_or(format_err!("required parameter not found"))?
-                {
-                    RandomParamSpec::Constant { value } => Ok(GenericFloatParam::Constant(value)),
-                    RandomParamSpec::Uniform { range } => {
-                        let (lower, upper) = range;
-                        let dist = Uniform::new_inclusive(lower, upper);
-                        Ok(GenericFloatParam::Uniform(dist))
+                    {
+                        RandomParamSpec::Constant { value } => Ok(GenericFloatParam::Constant(value)),
+                        RandomParamSpec::Uniform { range } => {
+                            let (lower, upper) = range;
+                            let dist = Uniform::new_inclusive(lower, upper);
+                            Ok(GenericFloatParam::Uniform(dist))
+                        }
+                        RandomParamSpec::Normal { range } => {
+                            let (lower, upper) = range;
+                            let mean = (lower + upper) / 2.;
+                            let sd = (mean - lower) / 2.58; // 99% of values in range
+                            Ok(GenericFloatParam::Normal(Normal::new(mean, sd)))
+                        }
                     }
-                    RandomParamSpec::Normal { range } => {
-                        let (lower, upper) = range;
-                        let mean = (lower + upper) / 2.;
-                        let sd = (mean - lower) / 2.58; // 99% of values in range
-                        Ok(GenericFloatParam::Normal(Normal::new(mean, sd)))
-                    }
-                }
             }
         }
     }
@@ -706,6 +706,8 @@ pub struct GenericScenarioSpec {
     pub arena_size: Metres,
     #[serde(default)]
     pub output_csv: bool,
+    #[serde(default)]
+    pub add_noise: bool,
     pub speed_limit_factor: Option<f64>,
 }
 
@@ -724,8 +726,8 @@ pub struct DesaiRobotSpec {
 
 impl DesaiRobotSpec {
     pub fn to_real_spec<F>(&self, generator: &mut F, spec_type: ControlSpecType) -> NonHolonomicRobotSpec
-    where
-        F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
+        where
+            F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
     {
         NonHolonomicRobotSpec {
             id: self.id.clone(),
@@ -952,7 +954,11 @@ impl GenericScenarioExecutionContext {
                     spec.sim_resolution,
                     spec.resolution,
                     max_speed,
+                    spec.add_noise,
                 );
+                let mut pt_params: Params = HashMap::with_capacity(1);
+                pt_params.insert("path_err_sqd".to_string(), ConstantParam::Float(path_err));
+                file_description.per_trajectory_features.push(pt_params);
 
                 total_path_err_sq += path_err;
 

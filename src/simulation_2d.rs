@@ -644,15 +644,20 @@ impl<'a> System<'a> for ApplyControl {
 
 #[derive(Debug, Component)]
 struct TrackedPathError {
-    desired_offset: Metres2D,
     total_err_sq: Metres,
     ticks: usize,
+    desired_l: Metres,
+    desired_phi: Radians,
 }
 
 impl TrackedPathError {
-    pub fn new(desired_offset: Metres2D) -> Self {
+    pub fn new(leader: OrientedPosition2D, follower: Metres2D) -> Self {
+        let diff = (follower - leader.position).to_polar();
+        let desired_l = diff.r;
+        let desired_phi = diff.theta - leader.rotation;
         TrackedPathError {
-            desired_offset,
+            desired_l,
+            desired_phi,
             total_err_sq: 0.,
             ticks: 0,
         }
@@ -662,8 +667,9 @@ impl TrackedPathError {
         self.total_err_sq / (self.ticks as f64)
     }
 
-    pub fn track(&mut self, offset: Metres2D) {
-        let err_sq = (self.desired_offset - offset).length().powi(2);
+    pub fn track(&mut self, (l_pos, l_head): (Metres2D, Radians), follower: &NonHolonomicDynamics) {
+        let l_hat = l_pos + PolarMetres2D::new(self.desired_l, self.desired_phi + l_head).to_cartesian();
+        let err_sq = (l_hat - follower.position).length().powi(2);
         self.total_err_sq += err_sq;
         self.ticks += 1;
     }
@@ -694,19 +700,16 @@ impl<'a> System<'a> for CalculatePathError {
     fn run(&mut self, data: <Self as System>::SystemData) {
         let (mut path_errors, dynamics, time) = data;
         let t = time.sim_time();
-        let traj_pos = {
+        let traj = {
             if t > self.path_length {
-                let (pos, _) = self.leader_path.endpoint();
-                pos
+                self.leader_path.endpoint()
             } else {
-                let (pos, _) = self.leader_path.sample(t).expect("calc path err t sample");
-                pos
+                self.leader_path.sample(t).expect("calc path err t sample")
             }
         };
 
         for (path_err, dynamic) in (&mut path_errors, &dynamics).join() {
-            let offset = traj_pos - dynamic.position;
-            path_err.track(offset);
+            path_err.track(traj, &dynamic);
         }
     }
 }
@@ -740,6 +743,7 @@ pub fn do_desai_simulation(
     sim_resolution: f64,
     track_resolution: f64,
     max_speed: Option<MetresPerSecond>,
+    add_noise: bool,
 ) -> (HashMap<String, UniformDynamicTrajectory>, Metres) {
     let mut world = World::new();
     world.add_resource(GlobalUniformTime::new(sim_resolution));
@@ -748,7 +752,7 @@ pub fn do_desai_simulation(
 
     // grab a copy of the leader path
 
-    let (leader_path, initial_leader_pos) = {
+    let (leader_path, initial_leader) = {
         robots
             .iter()
             .filter_map(|spec| match spec.control {
@@ -756,7 +760,7 @@ pub fn do_desai_simulation(
                 RobotControl::Desai(DesaiControl::VLPrescribed { ref path, .. }) |
                 RobotControl::Shen(ShenControl::Prescribed { ref path }) |
                 RobotControl::Shen(ShenControl::VLPrescribed { ref path, .. } )=> {
-                    Some((path.clone(), spec.initial_configuration.position))
+                    Some((path.clone(), spec.initial_configuration))
                 }
                 _ => None,
             })
@@ -801,13 +805,12 @@ pub fn do_desai_simulation(
                 let time = world.read_resource::<GlobalUniformTime>();
                 TrackedDynamicTrajectory::new(&*time, track_resolution)
             };
-            let leader_offset = initial_leader_pos - dynamics.position;
             let entity = world
                 .create_entity()
                 .with(dynamics)
                 .with(tracking)
                 .with(RobotId(robot.id.clone()))
-                .with(TrackedPathError::new(leader_offset))
+                .with(TrackedPathError::new(initial_leader, robot.initial_configuration.position))
                 .build();
             (robot.id.clone(), entity)
         })
