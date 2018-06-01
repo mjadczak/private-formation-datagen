@@ -2,6 +2,9 @@ use base::*;
 use dubins::MultiDubinsPath;
 use nalgebra as na;
 use nalgebra::{Matrix2, Matrix6x2, Vector2, Vector6};
+use rand::distributions::StandardNormal;
+use rand::rngs::SmallRng;
+use rand::{FromEntropy, Rng};
 use specs::prelude::*;
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -63,6 +66,21 @@ impl GlobalUniformTime {
     }
 }
 
+fn sense_sharp_ir<R: Rng + ?Sized>(rng: &mut R, true_d: f64) -> f64 {
+    const SHARP_IR_EQN: [f64; 3] = [-0.020077009250469, 0.120573832696841, 0.003295559781587];
+    let d2 = true_d * true_d;
+    let d3 = true_d * d2;
+    let sd = d3 * SHARP_IR_EQN[0] + d2 * SHARP_IR_EQN[1] + true_d * SHARP_IR_EQN[0];
+    let error = rng.sample(StandardNormal) * sd;
+    true_d + error
+}
+
+fn sense_angle_sensor<R: Rng + ?Sized>(rng: &mut R, true_angle: Radians) -> Radians {
+    const ANGLE_SD: f64 = 0.004363323 / 1.96;
+    let err = rng.sample(StandardNormal) * ANGLE_SD;
+    true_angle + err
+}
+
 #[derive(Debug, Component, Copy, Clone)]
 pub struct NonHolonomicDynamics {
     pub position: Metres2D,
@@ -73,7 +91,10 @@ pub struct NonHolonomicDynamics {
 
 impl NonHolonomicDynamics {
     pub fn update(&mut self, delta: Seconds) {
-        self.position += PolarMetres2D::new(self.speed * delta, self.heading + delta * self.angular_velocity * 0.5).to_cartesian();
+        self.position += PolarMetres2D::new(
+            self.speed * delta,
+            self.heading + delta * self.angular_velocity * 0.5,
+        ).to_cartesian();
         self.heading += (delta * self.angular_velocity);
         self.heading = self.heading.mod2pi();
     }
@@ -225,26 +246,35 @@ impl ShenLPsiControl {
         let e_dot_ = Vector2::new(e_l_d, e_psi_d);
         // column major init
         let h__ = Matrix6x2::from_column_slice(&[
-            e_l_p, e_l_i, e_l_d, 0., 0., 0.,
-            0., 0., 0., e_psi_p, e_psi_i, e_psi_d,
+            e_l_p, e_l_i, e_l_d, 0., 0., 0., 0., 0., 0., e_psi_p, e_psi_i, e_psi_d,
         ]);
         let u_pid_ = h__.transpose() * self.k_pid_;
 
-
-
         // row major init
-        let mut g__ = Matrix2::new(gamma_1.cos(), D * gamma_1.sin(), -(gamma_1.sin() / l_12), D * gamma_1.cos() / l_12);
+        let mut g__ = Matrix2::new(
+            gamma_1.cos(),
+            D * gamma_1.sin(),
+            -(gamma_1.sin() / l_12),
+            D * gamma_1.cos() / l_12,
+        );
 
-        trace!("e_:{}e_dot_:{}h__:{}u_pid_:{}g__:{}\n", e_, e_dot_, h__, u_pid_, g__);
+        trace!(
+            "e_:{}e_dot_:{}h__:{}u_pid_:{}g__:{}\n",
+            e_,
+            e_dot_,
+            h__,
+            u_pid_,
+            g__
+        );
 
         // generate control
         // invert g
         assert!(g__.try_inverse_mut());
         let u2_ = g__ * u_pid_;
 
-
         // update control
-        let k_pid_dot_ = -self.lambda * h__ * (e_dot_ + self.k__ * e_) - self.lambda * self.eps_2 * self.k_pid_;
+        let k_pid_dot_ =
+            -self.lambda * h__ * (e_dot_ + self.k__ * e_) - self.lambda * self.eps_2 * self.k_pid_;
         self.k_pid_ += k_pid_dot_ * delta_t;
 
         trace!("u2_:{}k_pid_dot_:{}\n", u2_, k_pid_dot_);
@@ -378,8 +408,6 @@ impl VLPrescribedControl {
     }
 }
 
-
-
 #[derive(Debug, Component)]
 struct VLShenPrescribedControl {
     path: PrescribedControl,
@@ -388,7 +416,14 @@ struct VLShenPrescribedControl {
 
 impl VLShenPrescribedControl {
     // me is a dummy so doesn't actually matter
-    pub fn new(path: MultiDubinsPath, me: Entity, lambda: f64, k1: f64, k2: f64, eps_2: f64) -> Self {
+    pub fn new(
+        path: MultiDubinsPath,
+        me: Entity,
+        lambda: f64,
+        k1: f64,
+        k2: f64,
+        eps_2: f64,
+    ) -> Self {
         VLShenPrescribedControl {
             path: PrescribedControl::new(path),
             control: ShenLPsiControl::from_parameters(me, -D, 0., lambda, k1, k2, eps_2),
@@ -402,10 +437,10 @@ impl VLShenPrescribedControl {
         resolution: Seconds,
     ) -> (MetresPerSecond, RadiansPerSecond) {
         let leader_dynamics = self.path.sample(t, resolution);
-        self.control.calculate_control(follower, &leader_dynamics, resolution)
+        self.control
+            .calculate_control(follower, &leader_dynamics, resolution)
     }
 }
-
 
 #[derive(Debug, Component)]
 struct PrescribedControl {
@@ -529,7 +564,10 @@ impl<'a> System<'a> for ApplyNonHolonomicDynamics {
                 dynamic.speed = dynamic.speed.max(-speed).min(speed);
             }
             let max_angular_speed = 2. * PI / time.sim_delta();
-            dynamic.angular_velocity = dynamic.angular_velocity.max(-max_angular_speed).min(max_angular_speed);
+            dynamic.angular_velocity = dynamic
+                .angular_velocity
+                .max(-max_angular_speed)
+                .min(max_angular_speed);
             dynamic.update(time.sim_delta());
         }
 
@@ -580,16 +618,7 @@ impl<'a> System<'a> for ApplyControl {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (
-            entities,
-            mut dynamics,
-            lpsi,
-            ll,
-            vlp,
-            mut shen_lp,
-            mut shen_vlp,
-            time
-        ) = data;
+        let (entities, mut dynamics, lpsi, ll, vlp, mut shen_lp, mut shen_vlp, time) = data;
         use specs::Join;
 
         for (follower_entity, follower, control) in (&*entities, &dynamics, &lpsi).join() {
@@ -618,7 +647,8 @@ impl<'a> System<'a> for ApplyControl {
 
         for (follower_entity, follower, control) in (&*entities, &dynamics, &mut shen_lp).join() {
             let leader = dynamics.get(control.leader()).unwrap();
-            let new_dynamics = DynamicsChange::new(control.calculate_control(follower, leader, time.sim_delta()));
+            let new_dynamics =
+                DynamicsChange::new(control.calculate_control(follower, leader, time.sim_delta()));
             self.new_dynamics.add(follower_entity, new_dynamics);
         }
 
@@ -668,7 +698,8 @@ impl TrackedPathError {
     }
 
     pub fn track(&mut self, (l_pos, l_head): (Metres2D, Radians), follower: &NonHolonomicDynamics) {
-        let l_hat = l_pos + PolarMetres2D::new(self.desired_l, self.desired_phi + l_head).to_cartesian();
+        let l_hat =
+            l_pos + PolarMetres2D::new(self.desired_l, self.desired_phi + l_head).to_cartesian();
         let err_sq = (l_hat - follower.position).length().powi(2);
         self.total_err_sq += err_sq;
         self.ticks += 1;
@@ -733,9 +764,23 @@ pub enum DesaiControl {
 }
 
 pub enum ShenControl {
-    Prescribed { path: MultiDubinsPath },
-    VLPrescribed { path: MultiDubinsPath, lambda: f64, k1: f64, k2: f64, eps2: f64 },
-    LPsi { leader: String, lambda: f64, k1: f64, k2: f64, eps2: f64 },
+    Prescribed {
+        path: MultiDubinsPath,
+    },
+    VLPrescribed {
+        path: MultiDubinsPath,
+        lambda: f64,
+        k1: f64,
+        k2: f64,
+        eps2: f64,
+    },
+    LPsi {
+        leader: String,
+        lambda: f64,
+        k1: f64,
+        k2: f64,
+        eps2: f64,
+    },
 }
 
 pub fn do_desai_simulation(
@@ -756,10 +801,10 @@ pub fn do_desai_simulation(
         robots
             .iter()
             .filter_map(|spec| match spec.control {
-                RobotControl::Desai(DesaiControl::Prescribed { ref path }) |
-                RobotControl::Desai(DesaiControl::VLPrescribed { ref path, .. }) |
-                RobotControl::Shen(ShenControl::Prescribed { ref path }) |
-                RobotControl::Shen(ShenControl::VLPrescribed { ref path, .. } )=> {
+                RobotControl::Desai(DesaiControl::Prescribed { ref path })
+                | RobotControl::Desai(DesaiControl::VLPrescribed { ref path, .. })
+                | RobotControl::Shen(ShenControl::Prescribed { ref path })
+                | RobotControl::Shen(ShenControl::VLPrescribed { ref path, .. }) => {
                     Some((path.clone(), spec.initial_configuration))
                 }
                 _ => None,
@@ -810,7 +855,10 @@ pub fn do_desai_simulation(
                 .with(dynamics)
                 .with(tracking)
                 .with(RobotId(robot.id.clone()))
-                .with(TrackedPathError::new(initial_leader, robot.initial_configuration.position))
+                .with(TrackedPathError::new(
+                    initial_leader,
+                    robot.initial_configuration.position,
+                ))
                 .build();
             (robot.id.clone(), entity)
         })
@@ -822,21 +870,33 @@ pub fn do_desai_simulation(
         let entity = *robot_entities.get(&spec.id).unwrap();
         match spec.control {
             RobotControl::Shen(control) => match control {
-                ShenControl::Prescribed { path }  => {
+                ShenControl::Prescribed { path } => {
                     let control = PrescribedControl::new(path);
                     world
                         .write_storage::<PrescribedControl>()
                         .insert(entity, control)
                         .expect("Prescribed control already present");
-                },
-                ShenControl::VLPrescribed { path, k1, k2, lambda, eps2 } => {
+                }
+                ShenControl::VLPrescribed {
+                    path,
+                    k1,
+                    k2,
+                    lambda,
+                    eps2,
+                } => {
                     let control = VLShenPrescribedControl::new(path, entity, lambda, k1, k2, eps2);
                     world
                         .write_storage::<VLShenPrescribedControl>()
                         .insert(entity, control)
                         .expect("VLShenPrescribedControl control already present");
-                },
-                ShenControl::LPsi {leader, k1, k2, lambda, eps2} => {
+                }
+                ShenControl::LPsi {
+                    leader,
+                    k1,
+                    k2,
+                    lambda,
+                    eps2,
+                } => {
                     let leader_entity = *robot_entities
                         .get(&leader)
                         .expect("Shen L-Psi leader was not found");
@@ -848,7 +908,7 @@ pub fn do_desai_simulation(
                         lambda,
                         k1,
                         k2,
-                        eps2
+                        eps2,
                     );
                     world
                         .write_storage::<ShenLPsiControl>()
@@ -902,7 +962,7 @@ pub fn do_desai_simulation(
                         .insert(entity, control)
                         .expect("L-L control already present");
                 }
-            }
+            },
         }
     }
 

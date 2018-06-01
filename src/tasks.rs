@@ -11,7 +11,9 @@ use serde_yaml;
 use simulation;
 use simulation::Simulation;
 use simulation::SimulationResult;
-use simulation_2d::{self, DesaiControl, ShenControl, NonHolonomicDynamics, NonHolonomicRobotSpec, RobotControl};
+use simulation_2d::{
+    self, DesaiControl, NonHolonomicDynamics, NonHolonomicRobotSpec, RobotControl, ShenControl,
+};
 use slugify::slugify;
 use std;
 use std::collections::HashMap;
@@ -38,6 +40,10 @@ pub struct ScenarioSpec {
     pub dimensions: usize,
     pub formations: FormationSpec,
     pub reference_trajectories: ReferenceTrajectorySpec,
+    #[serde(default)]
+    pub leader_mode: simulation::LeaderTrajectoryMode,
+    #[serde(default)]
+    pub output_csv: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -386,6 +392,10 @@ impl ScenarioExecutionContext {
         let sensors = vec![sensor; num_robots];
         let controllers = vec![controller; num_robots];
         let mut total_path_error = 0.;
+        let csv_dir = self.data_dir.join("csv");
+        if spec.output_csv {
+            std::fs::create_dir_all(&csv_dir)?;
+        }
 
         for (set_num, (params, trajectories)) in trajectory_sets.into_iter().enumerate() {
             debug!("Processing trajectory set number {}", set_num);
@@ -404,7 +414,7 @@ impl ScenarioExecutionContext {
             let data_file = File::create(file_path)?;
             let mut writer = tf_record::ResultsWriter::<File, S>::from_writer(data_file)?;
 
-            for trajectory in trajectories {
+            for (tnum, trajectory) in trajectories.into_iter().enumerate() {
                 let (formation_params, formation) =
                     formation_generator.generate(&mut rng, spec.robot.num_robots);
                 for leader in 0..spec.robot.num_robots {
@@ -416,8 +426,53 @@ impl ScenarioExecutionContext {
                             controllers.clone(),
                             &formation,
                             &trajectory,
-                            simulation::LeaderTrajectoryMode::Follow,
+                            spec.leader_mode,
                         ).run(spec.length, spec.resolution, &mut observer);
+
+                    if spec.output_csv {
+                        let csv_file_name = format!(
+                            "data{:0width$}_{}_l{}.csv", set_num,
+                            tnum,
+                            leader,
+                            width = set_num_width
+                        );
+                        let csv_file_path = csv_dir.join(csv_file_name);
+                        let mut writer = csv::Writer::from_path(csv_file_path)?;
+                        let res2 = result.clone();
+                        let t_res = res2.time_step();
+                        let num_robots = res2.num_robots();
+                        let csv_data = res2.into_data();
+                        let mut iterators: Vec<_> =
+                            csv_data.iter().map(|r_data| r_data.iter()).collect();
+                        let mut temp_record: Vec<String> =
+                            Vec::with_capacity(1 + num_robots * 2);
+                        // write header
+                        temp_record.push("t".to_string());
+                        for robot_id in 0..num_robots {
+                            temp_record.push(format!("r{}_x", robot_id));
+                            if spec.dimensions > 1 {
+                                temp_record.push(format!("r{}_y", robot_id));
+                            }
+                        }
+                        writer.write_record(&temp_record)?;
+                        temp_record.clear();
+                        let mut cur_t = 0.;
+                        'record: loop {
+                            temp_record.push(cur_t.to_string());
+                            for robot_data_iter in iterators.iter_mut() {
+                                let maybe_data = robot_data_iter.next();
+                                if let Some(&pos) = maybe_data {
+                                    let strings = pos.repr().into_iter().map(|v| v.to_string());
+                                    temp_record.extend(strings);
+                                } else {
+                                    break 'record; //end of iter
+                                }
+                            }
+                            writer.write_record(&temp_record)?;
+                            temp_record.clear();
+                            cur_t += t_res;
+                        }
+                    }
 
                     let mut trajectory_params = formation_params.clone();
                     trajectory_params
@@ -575,28 +630,28 @@ impl GenericFloatParam {
             ParamsSpec::Constant { ref values } => match *values
                 .get(key)
                 .ok_or(format_err!("required parameter not found"))?
-                {
-                    ConstantParam::Float(val) => Ok(GenericFloatParam::Constant(val)),
-                    ConstantParam::Int(val) => Ok(GenericFloatParam::Constant(val as f64)),
-                },
+            {
+                ConstantParam::Float(val) => Ok(GenericFloatParam::Constant(val)),
+                ConstantParam::Int(val) => Ok(GenericFloatParam::Constant(val as f64)),
+            },
             ParamsSpec::Random { ref values } => {
                 match *values
                     .get(key)
                     .ok_or(format_err!("required parameter not found"))?
-                    {
-                        RandomParamSpec::Constant { value } => Ok(GenericFloatParam::Constant(value)),
-                        RandomParamSpec::Uniform { range } => {
-                            let (lower, upper) = range;
-                            let dist = Uniform::new_inclusive(lower, upper);
-                            Ok(GenericFloatParam::Uniform(dist))
-                        }
-                        RandomParamSpec::Normal { range } => {
-                            let (lower, upper) = range;
-                            let mean = (lower + upper) / 2.;
-                            let sd = (mean - lower) / 2.58; // 99% of values in range
-                            Ok(GenericFloatParam::Normal(Normal::new(mean, sd)))
-                        }
+                {
+                    RandomParamSpec::Constant { value } => Ok(GenericFloatParam::Constant(value)),
+                    RandomParamSpec::Uniform { range } => {
+                        let (lower, upper) = range;
+                        let dist = Uniform::new_inclusive(lower, upper);
+                        Ok(GenericFloatParam::Uniform(dist))
                     }
+                    RandomParamSpec::Normal { range } => {
+                        let (lower, upper) = range;
+                        let mean = (lower + upper) / 2.;
+                        let sd = (mean - lower) / 2.58; // 99% of values in range
+                        Ok(GenericFloatParam::Normal(Normal::new(mean, sd)))
+                    }
+                }
             }
         }
     }
@@ -725,9 +780,13 @@ pub struct DesaiRobotSpec {
 }
 
 impl DesaiRobotSpec {
-    pub fn to_real_spec<F>(&self, generator: &mut F, spec_type: ControlSpecType) -> NonHolonomicRobotSpec
-        where
-            F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
+    pub fn to_real_spec<F>(
+        &self,
+        generator: &mut F,
+        spec_type: ControlSpecType,
+    ) -> NonHolonomicRobotSpec
+    where
+        F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
     {
         NonHolonomicRobotSpec {
             id: self.id.clone(),
@@ -743,7 +802,12 @@ impl DesaiRobotSpec {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ControlSpecType {
     Desai,
-    Shen { lambda: f64, k1: f64, k2: f64, eps2: f64 }
+    Shen {
+        lambda: f64,
+        k1: f64,
+        k2: f64,
+        eps2: f64,
+    },
 }
 
 impl Default for ControlSpecType {
@@ -768,8 +832,8 @@ impl DesaiControlSpec {
         initial_position: OrientedPosition2D,
         spec_type: ControlSpecType,
     ) -> RobotControl
-        where
-            F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
+    where
+        F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
     {
         match spec_type {
             ControlSpecType::Desai => {
@@ -788,8 +852,13 @@ impl DesaiControlSpec {
                     },
                 };
                 RobotControl::Desai(control)
-            },
-            ControlSpecType::Shen { lambda, k1, k2, eps2 } => {
+            }
+            ControlSpecType::Shen {
+                lambda,
+                k1,
+                k2,
+                eps2,
+            } => {
                 let control = match *self {
                     DesaiControlSpec::LPsi { ref leader } => ShenControl::LPsi {
                         leader: leader.clone(),

@@ -225,6 +225,7 @@ impl Controller<Metres2D> for UniformPIDController2D {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct SimpleSimulationResult<S: Vector>(Seconds, Vec<Vec<S>>, Option<f64>);
 
 impl<S: Vector> SimulationResult<S> for SimpleSimulationResult<S> {
@@ -253,13 +254,20 @@ impl<S: Vector> SimulationResult<S> for SimpleSimulationResult<S> {
     }
 }
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LeaderTrajectoryMode {
     /// Simply use the reference trajectory as the exact trajectory of the leader
     Predefined,
 
     /// Use the reference trajectory as something for the leader to follow
     Follow,
+}
+
+impl Default for LeaderTrajectoryMode {
+    fn default() -> Self {
+        LeaderTrajectoryMode::Follow
+    }
 }
 
 pub trait DistanceSensor<S>: Clone {
