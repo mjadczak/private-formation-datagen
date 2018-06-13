@@ -19,6 +19,7 @@ use std;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
+use std::ops::DerefMut;
 use std::path::PathBuf;
 use tf_record;
 use time;
@@ -44,6 +45,15 @@ pub struct ScenarioSpec {
     pub leader_mode: simulation::LeaderTrajectoryMode,
     #[serde(default)]
     pub output_csv: bool,
+    #[serde(default)]
+    pub override_trajectory: Option<OverrideTrajSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverrideTrajSpec {
+    TwoD(Vec<(Seconds, Metres2D)>),
+    OneD(Vec<(Seconds, Metres)>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -288,6 +298,7 @@ impl ScenarioExecutionContext {
         let num_sets = spec.reference_trajectories.num_sets;
         let num_per_set = spec.reference_trajectories.num_per_set;
         let mut rng = SmallRng::from_entropy();
+
         match spec.dimensions {
             1 => {
                 let mut trajectory_sets: TrajectorySets<Metres> = Vec::with_capacity(num_sets);
@@ -297,11 +308,21 @@ impl ScenarioExecutionContext {
                     let mut set: Vec<trajectory::NaiveTrajectory<Metres>> =
                         Vec::with_capacity(num_per_set);
                     for _ in 0..num_per_set {
-                        set.push(generator.generate(
-                            spec.length,
-                            spec.resolution,
-                            spec.robot.max_speed,
-                        ));
+                        match spec.override_trajectory {
+                            Some(OverrideTrajSpec::OneD(ref path)) => {
+                                set.push(trajectory::NaiveTrajectory::from_points(
+                                    spec.resolution,
+                                    path.clone(),
+                                ));
+                            }
+                            _ => {
+                                set.push(generator.generate(
+                                    spec.length,
+                                    spec.resolution,
+                                    spec.robot.max_speed,
+                                ));
+                            }
+                        }
                     }
                     trajectory_sets.push((params, set));
                 }
@@ -334,11 +355,21 @@ impl ScenarioExecutionContext {
                     let mut set: Vec<trajectory::NaiveTrajectory<Metres2D>> =
                         Vec::with_capacity(num_per_set);
                     for _ in 0..num_per_set {
-                        set.push(generator.generate(
-                            spec.length,
-                            spec.resolution,
-                            spec.robot.max_speed,
-                        ));
+                        match spec.override_trajectory {
+                            Some(OverrideTrajSpec::TwoD(ref path)) => {
+                                set.push(trajectory::NaiveTrajectory::from_points(
+                                    spec.resolution,
+                                    path.clone(),
+                                ));
+                            }
+                            _ => {
+                                set.push(generator.generate(
+                                    spec.length,
+                                    spec.resolution,
+                                    spec.robot.max_speed,
+                                ));
+                            }
+                        }
                     }
                     trajectory_sets.push((params, set));
                 }
@@ -431,7 +462,8 @@ impl ScenarioExecutionContext {
 
                     if spec.output_csv {
                         let csv_file_name = format!(
-                            "data{:0width$}_{}_l{}.csv", set_num,
+                            "data{:0width$}_{}_l{}.csv",
+                            set_num,
                             tnum,
                             leader,
                             width = set_num_width
@@ -444,8 +476,7 @@ impl ScenarioExecutionContext {
                         let csv_data = res2.into_data();
                         let mut iterators: Vec<_> =
                             csv_data.iter().map(|r_data| r_data.iter()).collect();
-                        let mut temp_record: Vec<String> =
-                            Vec::with_capacity(1 + num_robots * 2);
+                        let mut temp_record: Vec<String> = Vec::with_capacity(1 + num_robots * 2);
                         // write header
                         temp_record.push("t".to_string());
                         for robot_id in 0..num_robots {
@@ -764,6 +795,7 @@ pub struct GenericScenarioSpec {
     #[serde(default)]
     pub add_noise: bool,
     pub speed_limit_factor: Option<f64>,
+    pub override_trajectory: Option<MultiDubinsPath>,
 }
 
 impl GenericScenarioSpec {
@@ -780,14 +812,11 @@ pub struct DesaiRobotSpec {
 }
 
 impl DesaiRobotSpec {
-    pub fn to_real_spec<F>(
+    pub fn to_real_spec(
         &self,
-        generator: &mut F,
+        mut generator: impl FnMut(OrientedPosition2D) -> MultiDubinsPath,
         spec_type: ControlSpecType,
-    ) -> NonHolonomicRobotSpec
-    where
-        F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
-    {
+    ) -> NonHolonomicRobotSpec {
         NonHolonomicRobotSpec {
             id: self.id.clone(),
             initial_configuration: self.initial_configuration,
@@ -826,15 +855,12 @@ pub enum DesaiControlSpec {
 }
 
 impl DesaiControlSpec {
-    pub fn to_control<F>(
+    pub fn to_control(
         &self,
-        generator: &mut F,
+        mut generator: impl FnMut(OrientedPosition2D) -> MultiDubinsPath,
         initial_position: OrientedPosition2D,
         spec_type: ControlSpecType,
-    ) -> RobotControl
-    where
-        F: FnMut(OrientedPosition2D) -> MultiDubinsPath,
-    {
+    ) -> RobotControl {
         match spec_type {
             ControlSpecType::Desai => {
                 let control = match *self {
@@ -966,16 +992,23 @@ impl GenericScenarioExecutionContext {
         let speed = spec.speed;
         let min_length = spec.length;
         let arena_size = spec.arena_size;
-        let mut traj_generator = |initial: OrientedPosition2D| {
-            MultiDubinsPath::generate(
-                turning_radius,
-                speed,
-                min_length,
-                &mut rng,
-                initial,
-                arena_size,
-            ).expect("could not generate leader path")
-        };
+        let mut traj_generator: Box<FnMut(OrientedPosition2D) -> MultiDubinsPath> =
+            match spec.override_trajectory {
+                None => Box::new(|initial: OrientedPosition2D| {
+                    MultiDubinsPath::generate(
+                        turning_radius,
+                        speed,
+                        min_length,
+                        &mut rng,
+                        initial,
+                        arena_size,
+                    ).expect("could not generate leader path")
+                }),
+                Some(path) => {
+                    let path2 = path.clone();
+                    Box::new(move |_| path2.clone())
+                }
+            };
 
         let mut total_path_err_sq = 0.;
 
@@ -1015,7 +1048,7 @@ impl GenericScenarioExecutionContext {
                 let spec_type = spec.spec_type;
                 let robots: Vec<NonHolonomicRobotSpec> = configuration
                     .iter()
-                    .map(|c| c.to_real_spec(&mut traj_generator, spec_type))
+                    .map(|c| c.to_real_spec(traj_generator.deref_mut(), spec_type))
                     .collect();
 
                 let (mut results, path_err) = simulation_2d::do_desai_simulation(
@@ -1024,6 +1057,7 @@ impl GenericScenarioExecutionContext {
                     spec.resolution,
                     max_speed,
                     spec.add_noise,
+                    spec.length,
                 );
                 let mut pt_params: Params = HashMap::with_capacity(1);
                 pt_params.insert("path_err_sqd".to_string(), ConstantParam::Float(path_err));

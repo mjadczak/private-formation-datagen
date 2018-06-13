@@ -789,10 +789,10 @@ pub fn do_desai_simulation(
     track_resolution: f64,
     max_speed: Option<MetresPerSecond>,
     add_noise: bool,
+    sim_time: Seconds,
 ) -> (HashMap<String, UniformDynamicTrajectory>, Metres) {
     let mut world = World::new();
     world.add_resource(GlobalUniformTime::new(sim_resolution));
-    let sim_time = 10.;
     let num_robots = robots.len();
 
     // grab a copy of the leader path

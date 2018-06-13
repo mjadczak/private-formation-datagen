@@ -1,5 +1,7 @@
 use core::fmt::Debug;
 use num::Zero;
+use serde::Deserialize;
+use serde::Serialize;
 use std::ops::*;
 
 pub trait Vector:
@@ -17,6 +19,8 @@ pub trait Vector:
     + Copy
     + Zero
     + Debug
+    + Serialize
+    + for<'a> Deserialize<'a>
 {
     fn length(&self) -> f64;
 

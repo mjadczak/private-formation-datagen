@@ -7,7 +7,7 @@ pub const EDUBBADRHO: u32 = 3;
 pub const EDUBNOPATH: u32 = 4;
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum DubinsPathType {
     LSL,
     LSR,
@@ -24,7 +24,7 @@ impl Default for DubinsPathType {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, Serialize, Deserialize)]
 pub struct DubinsPath {
     pub qi: [f64; 3usize],
     pub param: [f64; 3usize],

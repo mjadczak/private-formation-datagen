@@ -11,6 +11,7 @@ extern crate serde_yaml;
 extern crate time;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde;
 #[macro_use]
 extern crate failure_derive;
 #[macro_use]
@@ -482,7 +483,7 @@ fn dubins_gen(
     let out_dir_path = Path::new(out);
     std::fs::create_dir_all(out_dir_path).unwrap();
     let mut rng = thread_rng();
-
+    let mut all_trajs: Vec<dubins::MultiDubinsPath> = Vec::with_capacity(num);
     for i in 0..num {
         print!(
             "\rWorking... [{:0width$}/{:0width$}]",
@@ -498,6 +499,7 @@ fn dubins_gen(
             OrientedPosition2D::new(0., 0., PI / 2.),
             arena_size,
         ).unwrap();
+        all_trajs.push(trajectory.clone());
         let data = trajectory.to_dynamic_trajectory(resolution);
 
         let file_name = format!("dtraj_{:0width$}.csv", i, width = num_len);
@@ -519,6 +521,9 @@ fn dubins_gen(
         }
         writer.flush().unwrap();
     }
+    let dump_file_path = out_dir_path.join("traj_dump.yaml");
+    let mut dump_file = File::create(&dump_file_path).unwrap();
+    serde_yaml::to_writer(&mut dump_file, &all_trajs).unwrap();
     println!("\nDone!");
 }
 
@@ -527,7 +532,7 @@ fn traj_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
     let num_len = num.to_string().len();
     let out_dir_path = Path::new(out);
     std::fs::create_dir_all(out_dir_path).unwrap();
-
+    let mut all_trajs: Vec<Vec<(Seconds, Metres)>> = Vec::with_capacity(num);
     for i in 0..num {
         print!(
             "\rWorking... [{:0width$}/{:0width$}]",
@@ -537,6 +542,7 @@ fn traj_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
         );
         let trajectory =
             trajectory::generate_1d_trajectory_points_simple(max_speed, length, variability, rsd);
+        all_trajs.push(trajectory.clone());
 
         // write to a test path
         let file_name = format!("traj_{:0width$}.csv", i, width = num_len);
@@ -549,6 +555,9 @@ fn traj_gen(length: f64, variability: f64, rsd: f64, num: usize, out: &str) {
         }
         writer.flush().unwrap();
     }
+    let dump_file_path = out_dir_path.join("traj_dump.yaml");
+    let mut dump_file = File::create(&dump_file_path).unwrap();
+    serde_yaml::to_writer(&mut dump_file, &all_trajs).unwrap();
     println!("\nDone!");
 }
 
@@ -557,7 +566,7 @@ fn traj_gen_2d(length: f64, variability: f64, rsd: f64, turnability: f64, num: u
     let num_len = num.to_string().len();
     let out_dir_path = Path::new(out);
     std::fs::create_dir_all(out_dir_path).unwrap();
-
+    let mut all_trajs: Vec<Vec<(Seconds, Metres2D)>> = Vec::with_capacity(num);
     for i in 0..num {
         print!(
             "\rWorking... [{:0width$}/{:0width$}]",
@@ -572,6 +581,7 @@ fn traj_gen_2d(length: f64, variability: f64, rsd: f64, turnability: f64, num: u
             rsd,
             turnability,
         );
+        all_trajs.push(trajectory.clone());
 
         // write to a test path
         let file_name = format!("traj_{:0width$}.csv", i, width = num_len);
@@ -584,6 +594,9 @@ fn traj_gen_2d(length: f64, variability: f64, rsd: f64, turnability: f64, num: u
         }
         writer.flush().unwrap();
     }
+    let dump_file_path = out_dir_path.join("traj_dump.yaml");
+    let mut dump_file = File::create(&dump_file_path).unwrap();
+    serde_yaml::to_writer(&mut dump_file, &all_trajs).unwrap();
     println!("\nDone!");
 }
 
